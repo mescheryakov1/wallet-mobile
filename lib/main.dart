@@ -270,10 +270,22 @@ class _EmptyWallet extends StatelessWidget {
                 messenger.showSnackBar(
                   const SnackBar(content: Text('Новый кошелёк создан.')),
                 );
-              } catch (error) {
+              } catch (error, stackTrace) {
                 if (!context.mounted) return;
-                messenger.showSnackBar(
-                  SnackBar(content: Text('Ошибка создания кошелька: $error')),
+                await showDialog<void>(
+                  context: context,
+                  builder: (dialogContext) => AlertDialog(
+                    title: const Text('Ошибка создания кошелька'),
+                    content: SingleChildScrollView(
+                      child: Text('$error\n$stackTrace'),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(),
+                        child: const Text('Закрыть'),
+                      ),
+                    ],
+                  ),
                 );
               }
             },
