@@ -43,7 +43,76 @@ print("")
 PY
 )"
 
-TARGET_FLUTTER_VERSION="${FLUTTER_VERSION_OVERRIDE:-${MIN_FLUTTER_VERSION}}"
+RESOLVED_FLUTTER_VERSION="$(
+  MIN_DART_VERSION="${MIN_DART_VERSION}" \
+  MIN_FLUTTER_VERSION="${MIN_FLUTTER_VERSION}" \
+  python - <<'PY'
+import json
+import os
+import re
+import sys
+import urllib.request
+
+min_dart = os.environ.get("MIN_DART_VERSION", "").strip()
+if not min_dart:
+    sys.exit(0)
+
+min_flutter = os.environ.get("MIN_FLUTTER_VERSION", "").strip()
+
+
+def parse_version(value: str):
+    parts = [int(piece) for piece in re.split(r"[^0-9]+", value) if piece]
+    return tuple(parts)
+
+
+min_dart_tuple = parse_version(min_dart)
+min_flutter_tuple = parse_version(min_flutter) if min_flutter else ()
+
+try:
+    with urllib.request.urlopen(
+        "https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json",
+        timeout=10,
+    ) as response:
+        release_data = json.load(response)
+except Exception:
+    sys.exit(0)
+
+best_version = ""
+best_tuple = ()
+
+for release in release_data.get("releases", []):
+    if release.get("channel") != "stable":
+        continue
+    version = release.get("version") or ""
+    dart_version = release.get("dart_sdk_version") or ""
+    if not version or not dart_version:
+        continue
+    dart_tuple = parse_version(dart_version)
+    if not dart_tuple:
+        continue
+    if min_dart_tuple and dart_tuple < min_dart_tuple:
+        continue
+    flutter_tuple = parse_version(version)
+    if min_flutter_tuple and flutter_tuple < min_flutter_tuple:
+        continue
+    if not best_tuple or flutter_tuple > best_tuple:
+        best_tuple = flutter_tuple
+        best_version = version
+
+if best_version:
+    sys.stdout.write(best_version)
+PY
+)"
+RESOLVED_FLUTTER_VERSION="${RESOLVED_FLUTTER_VERSION//$'\n'/}"
+
+TARGET_FLUTTER_VERSION="${FLUTTER_VERSION_OVERRIDE:-${RESOLVED_FLUTTER_VERSION:-${MIN_FLUTTER_VERSION}}}"
+
+if [[ -n "${RESOLVED_FLUTTER_VERSION}" ]]; then
+  log "Resolved stable Flutter version with Dart >= ${MIN_DART_VERSION}: ${RESOLVED_FLUTTER_VERSION}"
+fi
+if [[ -n "${TARGET_FLUTTER_VERSION}" ]]; then
+  log "Using Flutter target version ${TARGET_FLUTTER_VERSION}"
+fi
 
 function version_lt() {
   [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" != "$2" ]]
@@ -134,9 +203,94 @@ function ensure_flutter_version() {
   fi
 }
 
+function install_flutter_from_archive() {
+  local desired_version="$1"
+  local channel="${FLUTTER_CHANNEL:-stable}"
+
+  if [[ -z "${desired_version}" ]]; then
+    return 1
+  fi
+
+  local platform=""
+  case "$(uname -s)" in
+    Linux*) platform="linux" ;;
+    Darwin*) platform="macos" ;;
+    *)
+      log "Unsupported platform $(uname -s) for Flutter archive installation."
+      return 1
+      ;;
+  esac
+
+  local cache_dir="${PROJECT_ROOT}/.tool-cache/flutter/${channel}-${desired_version}"
+  local sdk_root="${cache_dir}/flutter"
+
+  if [[ ! -x "${sdk_root}/bin/flutter" ]]; then
+    if ! command -v curl >/dev/null 2>&1; then
+      log "curl is required to download Flutter ${desired_version}"
+      return 1
+    fi
+
+    log "Downloading Flutter ${desired_version}-${channel} SDK"
+    rm -rf "${cache_dir}"
+    mkdir -p "${cache_dir}"
+
+    local archive=""
+    local url=""
+    if [[ "${platform}" == "linux" ]]; then
+      archive="flutter_linux_${desired_version}-${channel}.tar.xz"
+      url="https://storage.googleapis.com/flutter_infra_release/releases/${channel}/${platform}/${archive}"
+    else
+      archive="flutter_macos_${desired_version}-${channel}.zip"
+      url="https://storage.googleapis.com/flutter_infra_release/releases/${channel}/${platform}/${archive}"
+    fi
+
+    if ! curl -L --retry 3 --retry-connrefused --retry-delay 2 -o "${cache_dir}/${archive}" "${url}"; then
+      log "Failed to download Flutter archive from ${url}"
+      return 1
+    fi
+
+    if [[ "${archive}" == *.zip ]]; then
+      if ! command -v unzip >/dev/null 2>&1; then
+        log "unzip is required to extract Flutter ${desired_version}"
+        return 1
+      fi
+      if ! unzip -q "${cache_dir}/${archive}" -d "${cache_dir}"; then
+        log "Failed to extract Flutter archive ${archive}"
+        return 1
+      fi
+    else
+      local tar_flags="-xf"
+      [[ "${archive}" == *.tar.xz ]] && tar_flags="-xJf"
+
+      if ! tar ${tar_flags} "${cache_dir}/${archive}" -C "${cache_dir}"; then
+        log "Failed to extract Flutter archive ${archive}"
+        return 1
+      fi
+    fi
+
+    rm -f "${cache_dir}/${archive}"
+  fi
+
+  export FLUTTER_ROOT="${sdk_root}"
+  export PATH="${FLUTTER_ROOT}/bin:${PATH}"
+  hash -r
+
+  log "Using Flutter SDK from ${FLUTTER_ROOT}"
+  return 0
+}
+
 function upgrade_flutter() {
   local desired_version="$1"
   log "Upgrading Flutter SDK${desired_version:+ to ${desired_version}}"
+  if install_flutter_from_archive "${desired_version}"; then
+    flutter --version
+    return
+  fi
+
+  if [[ -n "${desired_version}" ]]; then
+    log "Falling back to in-place Flutter upgrade after archive installation failure"
+  fi
+
   flutter channel stable
 
   local root
