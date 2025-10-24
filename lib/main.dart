@@ -151,7 +151,10 @@ class _WalletHomePageState extends State<WalletHomePage> {
               if (_controller.isInitializing)
                 const Center(child: CircularProgressIndicator())
               else if (wallet == null)
-                _EmptyWallet(onCreate: _controller.createWallet)
+                _EmptyWallet(
+                  onCreate: _controller.createWallet,
+                  isCreating: _controller.isCreatingWallet,
+                )
               else ...[
                 WalletInfoCard(
                   wallet: wallet,
@@ -240,9 +243,13 @@ class _TransactionForm extends StatelessWidget {
 }
 
 class _EmptyWallet extends StatelessWidget {
-  const _EmptyWallet({required this.onCreate});
+  const _EmptyWallet({
+    required this.onCreate,
+    required this.isCreating,
+  });
 
   final Future<void> Function() onCreate;
+  final bool isCreating;
 
   @override
   Widget build(BuildContext context) {
@@ -261,35 +268,44 @@ class _EmptyWallet extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 24),
-          FilledButton(
-            onPressed: () async {
-              final messenger = ScaffoldMessenger.of(context);
-              try {
-                await onCreate();
-                if (!context.mounted) return;
-                messenger.showSnackBar(
-                  const SnackBar(content: Text('Новый кошелёк создан.')),
-                );
-              } catch (error, stackTrace) {
-                if (!context.mounted) return;
-                await showDialog<void>(
-                  context: context,
-                  builder: (dialogContext) => AlertDialog(
-                    title: const Text('Ошибка создания кошелька'),
-                    content: SingleChildScrollView(
-                      child: Text('$error\n$stackTrace'),
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.of(dialogContext).pop(),
-                        child: const Text('Закрыть'),
-                      ),
-                    ],
-                  ),
-                );
-              }
-            },
-            child: const Text('Создать кошелёк'),
+          FilledButton.icon(
+            onPressed: isCreating
+                ? null
+                : () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    try {
+                      await onCreate();
+                      if (!context.mounted) return;
+                      messenger.showSnackBar(
+                        const SnackBar(content: Text('Новый кошелёк создан.')),
+                      );
+                    } catch (error, stackTrace) {
+                      if (!context.mounted) return;
+                      await showDialog<void>(
+                        context: context,
+                        builder: (dialogContext) => AlertDialog(
+                          title: const Text('Ошибка создания кошелька'),
+                          content: SingleChildScrollView(
+                            child: Text('$error\n$stackTrace'),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(dialogContext).pop(),
+                              child: const Text('Закрыть'),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+                },
+            icon: isCreating
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.add),
+            label: Text(isCreating ? 'Создание...' : 'Создать кошелёк'),
           ),
         ],
       ),
@@ -442,9 +458,10 @@ class WalletController extends ChangeNotifier {
   EtherAmount? _balance;
 
   bool isInitializing = true;
+  bool isCreatingWallet = false;
   bool isRefreshingBalance = false;
   bool isSending = false;
-  bool get isBusy => isRefreshingBalance || isSending;
+  bool get isBusy => isRefreshingBalance || isSending || isCreatingWallet;
 
   String get formattedBalance {
     if (_balance == null) {
@@ -478,7 +495,7 @@ class WalletController extends ChangeNotifier {
   }
 
   Future<void> createWallet() async {
-    isInitializing = true;
+    isCreatingWallet = true;
     notifyListeners();
     try {
       final credentials = EthPrivateKey.createRandom(Random.secure());
@@ -491,7 +508,7 @@ class WalletController extends ChangeNotifier {
       wallet = null;
       rethrow;
     } finally {
-      isInitializing = false;
+      isCreatingWallet = false;
       notifyListeners();
     }
   }
