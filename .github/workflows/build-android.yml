@@ -1,0 +1,63 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.7'
+          channel: stable
+
+      - name: Check Flutter version
+        run: flutter --version
+
+      - name: Ensure Android SDK environment
+        run: |
+          if [ -z "${ANDROID_HOME:-}" ]; then
+            if [ -n "${ANDROID_SDK_ROOT:-}" ]; then
+              echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+            else
+              echo "ANDROID_HOME and ANDROID_SDK_ROOT are not set" >&2
+              exit 1
+            fi
+          else
+            echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Prepare Android environment
+        run: |
+          flutter config --no-analytics
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses
+
+      - name: Fetch platform assets
+        run: bash tool/fetch_platform_assets.sh
+
+      - name: Build Android APK
+        run: |
+          bash tool/ci-android-build.sh
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
