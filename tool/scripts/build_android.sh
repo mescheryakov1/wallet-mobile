@@ -10,11 +10,20 @@ function log() {
 
 pushd "${PROJECT_ROOT}" >/dev/null
 
-MIN_DART_VERSION="$(python - <<'PY'
+PUBSPEC_PATH="${PROJECT_ROOT}/pubspec.yaml"
+if [[ ! -f "${PUBSPEC_PATH}" ]]; then
+  log "Unable to locate pubspec.yaml at ${PUBSPEC_PATH}"
+  log "Ensure the repository is checked out before invoking this script."
+  exit 1
+fi
+
+MIN_DART_VERSION="$(PROJECT_ROOT="${PROJECT_ROOT}" python - <<'PY'
+import os
 import re
 from pathlib import Path
 
-match = re.search(r"sdk:\s*>=\s*([0-9.]+)", Path('pubspec.yaml').read_text())
+pubspec = Path(os.environ["PROJECT_ROOT"]) / "pubspec.yaml"
+match = re.search(r"sdk:\s*>=\s*([0-9.]+)", pubspec.read_text())
 print(match.group(1) if match else "0.0.0")
 PY
 )"
