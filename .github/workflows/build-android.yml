@@ -27,9 +27,20 @@ jobs:
           flutter-version: '3.22.2'
           channel: 'stable'
 
+      - name: Ensure Android SDK environment
+        run: |
+          if [ -z "${ANDROID_HOME:-}" ]; then
+            if [ -n "${ANDROID_SDK_ROOT:-}" ]; then
+              echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+            else
+              echo "ANDROID_HOME and ANDROID_SDK_ROOT are not set" >&2
+              exit 1
+            fi
+          else
+            echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          fi
+
       - name: Prepare Android environment
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
         run: |
           flutter config --no-analytics
           yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses
