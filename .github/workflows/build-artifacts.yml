@@ -1,0 +1,79 @@
+name: Build platform artifacts
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: stable
+      - name: Flutter version
+        run: flutter --version
+      - name: Build APK
+        run: tool/scripts/build_android.sh
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+  ios:
+    name: iOS IPA
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: stable
+      - name: Flutter version
+        run: flutter --version
+      - name: Build IPA (no codesign)
+        run: bash tool/scripts/build_ios.sh
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: build/ios/ipa/*.ipa
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: stable
+      - name: Flutter version
+        shell: pwsh
+        run: flutter --version
+      - name: Build Windows runner
+        shell: pwsh
+        run: ./tool/scripts/build_windows.ps1
+      - name: Prepare Windows archive
+        shell: pwsh
+        run: |
+          $archivePath = "build/windows/runner/wallet-windows.zip"
+          if (Test-Path $archivePath) { Remove-Item $archivePath }
+          Compress-Archive -Path "build/windows/runner/Release/*" -DestinationPath $archivePath
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: |
+            build/windows/runner/wallet-windows.zip
+            build/windows/runner/Release/*.exe
+          if-no-files-found: error
