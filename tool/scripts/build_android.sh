@@ -63,14 +63,35 @@ function flutter_root_dir() {
 }
 
 function parse_flutter_versions() {
-  flutter --version --machine | python - <<'PY'
+  local machine_output=""
+  if machine_output="$(flutter --version --machine 2>/dev/null)" && [[ -n "${machine_output}" ]]; then
+    FLUTTER_MACHINE_JSON="${machine_output}" python - <<'PY'
 import json
-import sys
+import os
 
-info = json.loads(sys.stdin.read())
+info = json.loads(os.environ["FLUTTER_MACHINE_JSON"])
 print(info.get("frameworkVersion", ""))
 print(info.get("dartSdkVersion", "").split()[0])
 PY
+    return
+  fi
+
+  local human_output=""
+  if human_output="$(flutter --version 2>/dev/null)" && [[ -n "${human_output}" ]]; then
+    FLUTTER_HUMAN_READABLE="${human_output}" python - <<'PY'
+import os
+import re
+
+text = os.environ["FLUTTER_HUMAN_READABLE"]
+framework = re.search(r"Flutter\s+([0-9.]+)", text)
+dart = re.search(r"Dart\s+([0-9.]+)", text)
+print(framework.group(1) if framework else "")
+print(dart.group(1) if dart else "")
+PY
+    return
+  fi
+
+  printf '\n\n'
 }
 
 function ensure_flutter_version() {
