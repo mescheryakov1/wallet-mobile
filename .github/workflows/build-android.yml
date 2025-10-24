@@ -48,6 +48,9 @@ jobs:
           flutter config --no-analytics
           yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses
 
+      - name: Fetch platform assets
+        run: bash tool/fetch_platform_assets.sh
+
       - name: Build Android APK
         run: |
           bash tool/ci-android-build.sh
