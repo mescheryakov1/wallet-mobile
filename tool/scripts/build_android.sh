@@ -10,6 +10,30 @@ function log() {
 
 pushd "${PROJECT_ROOT}" >/dev/null
 
+MIN_DART_VERSION="$(python - <<'PY'
+import re
+from pathlib import Path
+
+match = re.search(r"sdk:\s*>=\s*([0-9.]+)", Path('pubspec.yaml').read_text())
+print(match.group(1) if match else "0.0.0")
+PY
+)"
+TARGET_FLUTTER_VERSION="${FLUTTER_VERSION_OVERRIDE:-3.35.7}"
+
+function version_lt() {
+  [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" != "$2" ]]
+}
+
+if command -v dart >/dev/null 2>&1; then
+  CURRENT_DART_VERSION="$(dart --version 2>&1 | awk '{print $4}')"
+  if version_lt "${CURRENT_DART_VERSION}" "${MIN_DART_VERSION}"; then
+    log "Detected Dart ${CURRENT_DART_VERSION}, but project requires >= ${MIN_DART_VERSION}."
+    log "Switching Flutter SDK to ${TARGET_FLUTTER_VERSION} to satisfy Dart constraint."
+    yes | flutter version "${TARGET_FLUTTER_VERSION}"
+    flutter --version
+  fi
+fi
+
 SDK_PATH="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 if [[ -n "${SDK_PATH}" ]]; then
   log "Configuring Flutter to use Android SDK at ${SDK_PATH}"
