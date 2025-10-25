@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:bip39/bip39.dart' as bip39;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -152,8 +153,7 @@ class _WalletHomePageState extends State<WalletHomePage> {
                 const Center(child: CircularProgressIndicator())
               else if (wallet == null)
                 _EmptyWallet(
-                  onCreate: _controller.createWallet,
-                  isCreating: _controller.isCreatingWallet,
+                  controller: _controller,
                 )
               else ...[
                 WalletInfoCard(
@@ -259,12 +259,10 @@ class _TransactionForm extends StatelessWidget {
 
 class _EmptyWallet extends StatelessWidget {
   const _EmptyWallet({
-    required this.onCreate,
-    required this.isCreating,
+    required this.controller,
   });
 
-  final Future<void> Function() onCreate;
-  final bool isCreating;
+  final WalletController controller;
 
   @override
   Widget build(BuildContext context) {
@@ -279,51 +277,170 @@ class _EmptyWallet extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           const Text(
-            'Нажмите кнопку, чтобы сгенерировать приватный ключ и адрес.',
+            'Создайте новый ключ, чтобы получить сид-фразу, либо импортируйте '
+            'существующую сид-фразу.',
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 24),
           FilledButton.icon(
-            onPressed: isCreating
-                ? null
-                : () async {
-                    final messenger = ScaffoldMessenger.of(context);
-                    try {
-                      await onCreate();
-                      if (!context.mounted) return;
-                      messenger.showSnackBar(
-                        const SnackBar(content: Text('Новый кошелёк создан.')),
-                      );
-                    } catch (error, stackTrace) {
-                      if (!context.mounted) return;
-                      await showDialog<void>(
-                        context: context,
-                        builder: (dialogContext) => AlertDialog(
-                          title: const Text('Ошибка создания кошелька'),
-                          content: SingleChildScrollView(
-                            child: Text('$error\n$stackTrace'),
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.of(dialogContext).pop(),
-                              child: const Text('Закрыть'),
-                            ),
-                          ],
-                        ),
-                      );
-                    }
-                },
-            icon: isCreating
+            onPressed:
+                controller.isCreatingWallet ? null : () => _createWallet(context),
+            icon: controller.isCreatingWallet
                 ? const SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.add),
-            label: Text(isCreating ? 'Создание...' : 'Создать кошелёк'),
+            label: Text(
+              controller.isCreatingWallet ? 'Создание...' : 'Создать кошелёк',
+            ),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: controller.isCreatingWallet
+                ? null
+                : () => _promptImport(context),
+            icon: const Icon(Icons.lock_open),
+            label: const Text('Импорт по сид-фразе'),
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _createWallet(BuildContext context, {String? mnemonic}) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final result = await controller.createWallet(mnemonic: mnemonic);
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => _SeedPhraseDialog(
+          mnemonic: result.mnemonic,
+        ),
+      );
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Кошелёк создан. Сохраните сид-фразу.')),
+      );
+    } on WalletCreationException catch (error) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    } catch (error, stackTrace) {
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Ошибка создания кошелька'),
+          content: SingleChildScrollView(
+            child: Text('$error\n$stackTrace'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Закрыть'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  Future<void> _promptImport(BuildContext context) async {
+    final mnemonic = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        final mnemonicController = TextEditingController();
+        return AlertDialog(
+          title: const Text('Импорт по сид-фразе'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Введите сид-фразу из 24 слов в правильном порядке.'),
+              const SizedBox(height: 12),
+              TextField(
+                controller: mnemonicController,
+                minLines: 3,
+                maxLines: 5,
+                decoration: const InputDecoration(
+                  hintText: 'word1 word2 ... word24',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(mnemonicController.text);
+              },
+              child: const Text('Импортировать'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (mnemonic == null || mnemonic.trim().isEmpty) {
+      return;
+    }
+
+    await _createWallet(context, mnemonic: mnemonic);
+  }
+}
+
+class _SeedPhraseDialog extends StatelessWidget {
+  const _SeedPhraseDialog({required this.mnemonic});
+
+  final String mnemonic;
+
+  @override
+  Widget build(BuildContext context) {
+    final words = mnemonic.split(' ');
+    return AlertDialog(
+      title: const Text('Сид-фраза'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Запишите эти 24 слова и храните в надёжном месте. '
+              'Они позволяют восстановить доступ к кошельку.',
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (var i = 0; i < words.length; i++)
+                  Chip(label: Text('${i + 1}. ${words[i]}')),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton.icon(
+          onPressed: () {
+            ClipboardHelper.copy(context, mnemonic);
+          },
+          icon: const Icon(Icons.copy),
+          label: const Text('Скопировать'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Готово'),
+        ),
+      ],
     );
   }
 }
@@ -461,6 +578,75 @@ class ClipboardHelper {
   }
 }
 
+class WalletCreationResult {
+  WalletCreationResult({
+    required this.wallet,
+    required this.mnemonic,
+  });
+
+  final WalletData wallet;
+  final String mnemonic;
+}
+
+class WalletCreationException implements Exception {
+  const WalletCreationException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'WalletCreationException: $message';
+}
+
+class MnemonicWallet {
+  MnemonicWallet._(this.mnemonic, this.privateKeyHex);
+
+  final String mnemonic;
+  final String privateKeyHex;
+
+  static MnemonicWallet generate({
+    Random? random,
+    String? mnemonic,
+  }) {
+    if (mnemonic != null) {
+      final normalized = _normalizeMnemonic(mnemonic);
+      if (!bip39.validateMnemonic(normalized)) {
+        throw const WalletCreationException(
+          'Некорректная сид-фраза. Проверьте написание и порядок слов.',
+        );
+      }
+      final entropyHex = bip39.mnemonicToEntropy(normalized);
+      final entropyBytes = hexToBytes(entropyHex);
+      if (entropyBytes.length != 32) {
+        throw const WalletCreationException(
+          'Эта сид-фраза не поддерживается. Используйте фразу из 24 слов.',
+        );
+      }
+      final privateKeyHex = bytesToHex(entropyBytes, include0x: true);
+      return MnemonicWallet._(normalized, privateKeyHex);
+    }
+
+    final secureRandom = random ?? Random.secure();
+    final entropyBytes = List<int>.generate(32, (_) => secureRandom.nextInt(256));
+    final entropyHex = bytesToHex(entropyBytes);
+    final generatedMnemonic = bip39.entropyToMnemonic(entropyHex);
+    final privateKeyHex = bytesToHex(entropyBytes, include0x: true);
+    return MnemonicWallet._(generatedMnemonic, privateKeyHex);
+  }
+
+  static String _normalizeMnemonic(String mnemonic) {
+    final words = mnemonic
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((word) => word.isNotEmpty)
+        .map((word) => word.toLowerCase())
+        .toList();
+    if (words.isEmpty) {
+      throw const WalletCreationException('Сид-фраза не должна быть пустой.');
+    }
+    return words.join(' ');
+  }
+}
+
 class WalletController extends ChangeNotifier {
   WalletController({WalletStorage? storage})
     : _storage = storage ?? WalletStorage();
@@ -537,18 +723,46 @@ class WalletController extends ChangeNotifier {
     }
   }
 
-  Future<void> createWallet() async {
+  Future<WalletCreationResult> createWallet({String? mnemonic}) async {
     isCreatingWallet = true;
     notifyListeners();
 
     try {
-      final credentials = EthPrivateKey.createRandom(Random.secure());
-      final address = await credentials.extractAddress();
-      final privateKeyHex = bytesToHex(credentials.privateKey, include0x: true);
-      await _storage.savePrivateKey(privateKeyHex);
-      wallet = WalletData(privateKey: privateKeyHex, address: address);
+      final generated = MnemonicWallet.generate(
+        random: Random.secure(),
+        mnemonic: mnemonic,
+      );
+
+      late final WalletData createdWallet;
+      try {
+        final credentials = EthPrivateKey.fromHex(generated.privateKeyHex);
+        final address = await credentials.extractAddress();
+        createdWallet = WalletData(
+          privateKey: generated.privateKeyHex,
+          address: address,
+        );
+      } on ArgumentError catch (_) {
+        throw const WalletCreationException(
+          'Не удалось создать кошелёк по указанной сид-фразе.',
+        );
+      } on FormatException catch (_) {
+        throw const WalletCreationException(
+          'Не удалось создать кошелёк по указанной сид-фразе.',
+        );
+      } catch (_) {
+        throw const WalletCreationException(
+          'Не удалось создать кошелёк по указанной сид-фразе.',
+        );
+      }
+
+      await _storage.savePrivateKey(createdWallet.privateKey);
+      wallet = createdWallet;
       notifyListeners();
       await refreshBalance();
+      return WalletCreationResult(
+        wallet: createdWallet,
+        mnemonic: generated.mnemonic,
+      );
     } finally {
       isCreatingWallet = false;
       notifyListeners();
