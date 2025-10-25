@@ -1,10 +1,14 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:bip39/bip39.dart' as bip39;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:pointycastle/api.dart' show ECDomainParameters, ECPrivateKey, KeyParameter;
+import 'package:pointycastle/digests/sha512.dart';
+import 'package:pointycastle/mac/hmac.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web3dart/crypto.dart';
 import 'package:web3dart/web3dart.dart';
@@ -603,6 +607,17 @@ class MnemonicWallet {
   final String mnemonic;
   final String privateKeyHex;
 
+  static const _hardenedOffset = 0x80000000;
+  static const _derivationPath = <int>[
+    44 | _hardenedOffset,
+    60 | _hardenedOffset,
+    0 | _hardenedOffset,
+    0,
+    0,
+  ];
+  static final ECDomainParameters _secp256k1 = ECDomainParameters('secp256k1');
+  static final BigInt _secp256k1N = _secp256k1.n;
+
   static MnemonicWallet generate({
     Random? random,
     String? mnemonic,
@@ -621,7 +636,7 @@ class MnemonicWallet {
           'Эта сид-фраза не поддерживается. Используйте фразу из 24 слов.',
         );
       }
-      final privateKeyHex = bytesToHex(entropyBytes, include0x: true);
+      final privateKeyHex = _derivePrivateKeyHex(normalized);
       return MnemonicWallet._(normalized, privateKeyHex);
     }
 
@@ -629,7 +644,7 @@ class MnemonicWallet {
     final entropyBytes = List<int>.generate(32, (_) => secureRandom.nextInt(256));
     final entropyHex = bytesToHex(entropyBytes);
     final generatedMnemonic = bip39.entropyToMnemonic(entropyHex);
-    final privateKeyHex = bytesToHex(entropyBytes, include0x: true);
+    final privateKeyHex = _derivePrivateKeyHex(generatedMnemonic);
     return MnemonicWallet._(generatedMnemonic, privateKeyHex);
   }
 
@@ -645,6 +660,118 @@ class MnemonicWallet {
     }
     return words.join(' ');
   }
+
+  static String _derivePrivateKeyHex(String mnemonic) {
+    try {
+      final seed = Uint8List.fromList(bip39.mnemonicToSeed(mnemonic));
+      var node = _deriveMasterNode(seed);
+      for (final index in _derivationPath) {
+        node = _deriveChildPrivate(node, index);
+      }
+      return bytesToHex(node.key, include0x: true);
+    } catch (_) {
+      throw const WalletCreationException(
+        'Не удалось создать кошелёк по указанной сид-фразе.',
+      );
+    }
+  }
+
+  static _Bip32Node _deriveMasterNode(Uint8List seed) {
+    final hmacKey = Uint8List.fromList('Bitcoin seed'.codeUnits);
+    final i = _hmacSha512(hmacKey, seed);
+    final key = Uint8List.fromList(i.sublist(0, 32));
+    final chainCode = Uint8List.fromList(i.sublist(32));
+    if (_bytesToBigInt(key) == BigInt.zero) {
+      throw const WalletCreationException(
+        'Не удалось создать кошелёк по указанной сид-фразе.',
+      );
+    }
+    return _Bip32Node(key, chainCode);
+  }
+
+  static _Bip32Node _deriveChildPrivate(_Bip32Node parent, int index) {
+    final isHardened = index >= _hardenedOffset;
+    final dataBuilder = BytesBuilder();
+    if (isHardened) {
+      dataBuilder.add([0]);
+      dataBuilder.add(parent.key);
+    } else {
+      final publicKey = _privateKeyToCompressedPublicKey(parent.key);
+      dataBuilder.add(publicKey);
+    }
+    dataBuilder.add(_int32BigEndian(index));
+
+    final i = _hmacSha512(parent.chainCode, dataBuilder.toBytes());
+    final il = Uint8List.fromList(i.sublist(0, 32));
+    final ir = Uint8List.fromList(i.sublist(32));
+
+    final ilInt = _bytesToBigInt(il);
+    if (ilInt >= _secp256k1N) {
+      throw const WalletCreationException(
+        'Не удалось создать кошелёк по указанной сид-фразе.',
+      );
+    }
+
+    final parentKeyInt = _bytesToBigInt(parent.key);
+    final childKeyInt = (ilInt + parentKeyInt) % _secp256k1N;
+    if (childKeyInt == BigInt.zero) {
+      throw const WalletCreationException(
+        'Не удалось создать кошелёк по указанной сид-фразе.',
+      );
+    }
+
+    final childKey = _bigIntTo32Bytes(childKeyInt);
+    return _Bip32Node(childKey, ir);
+  }
+
+  static Uint8List _hmacSha512(Uint8List key, Uint8List data) {
+    final hmac = HMac(SHA512Digest(), 128)..init(KeyParameter(key));
+    return hmac.process(data);
+  }
+
+  static BigInt _bytesToBigInt(Uint8List bytes) {
+    var result = BigInt.zero;
+    for (final byte in bytes) {
+      result = (result << 8) | BigInt.from(byte);
+    }
+    return result;
+  }
+
+  static Uint8List _bigIntTo32Bytes(BigInt value) {
+    final bytes = Uint8List(32);
+    var temp = value;
+    for (var i = 31; i >= 0; i--) {
+      bytes[i] = (temp & BigInt.from(0xff)).toInt();
+      temp = temp >> 8;
+    }
+    return bytes;
+  }
+
+  static Uint8List _int32BigEndian(int value) {
+    final bytes = Uint8List(4);
+    final data = ByteData.view(bytes.buffer);
+    data.setUint32(0, value, Endian.big);
+    return bytes;
+  }
+
+  static Uint8List _privateKeyToCompressedPublicKey(Uint8List privateKey) {
+    final keyInt = _bytesToBigInt(privateKey);
+    final ecPrivateKey = ECPrivateKey(keyInt, _secp256k1);
+    final point = _secp256k1.G * ecPrivateKey.d;
+    if (point == null) {
+      throw const WalletCreationException(
+        'Не удалось создать кошелёк по указанной сид-фразе.',
+      );
+    }
+    return Uint8List.fromList(point.getEncoded(true));
+  }
+}
+
+class _Bip32Node {
+  const _Bip32Node(this.key, this.chainCode);
+
+  final Uint8List key;
+  final Uint8List chainCode;
 }
 
 class WalletController extends ChangeNotifier {
