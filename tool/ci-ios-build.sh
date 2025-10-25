@@ -46,12 +46,8 @@ flutter precache --ios
 # Fetch Dart and Flutter dependencies.
 flutter pub get
 
-# Install CocoaPods dependencies with repo update to keep lockfiles current.
-pushd ios >/dev/null
-pod install --repo-update
-popd >/dev/null
-
 # Build an unsigned IPA that can be signed later by CI.
+# Flutter's build step will prepare Pods automatically if needed.
 flutter build ipa --release --no-codesign
 
 # Print cache summary to help CI job configure persistence.
