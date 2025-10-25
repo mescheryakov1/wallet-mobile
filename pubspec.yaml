@@ -38,6 +38,7 @@ dependencies:
   http: ^1.1.0
   shared_preferences: ^2.2.3
   web3dart: ^2.7.3
+  blockchain_utils: ^5.2.0
 
 dev_dependencies:
   flutter_test:
