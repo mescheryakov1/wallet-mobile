@@ -631,9 +631,6 @@ class WalletData {
   final EthereumAddress address;
 }
 
-const String _ankrAccessQuery =
-    'signature=181781ca90a52cba4d62877c0328119ec5addf0a14307a92c9aabb92ad0853a50d58c4bf7b67af2d61309cd7f04899089c670c5096dc8a23b75ed7f86fbb62cc00&unique_id=437706db-f00c-4f2b-9307-878a85371b0d&application=MultiRPC&provider=GOOGLE&expires=1792879974670';
-
 class NetworkConfiguration {
   const NetworkConfiguration({
     required this.id,
@@ -652,7 +649,7 @@ class NetworkConfiguration {
   static const mainnet = NetworkConfiguration(
     id: 'mainnet',
     name: 'Ethereum Mainnet',
-    rpcUrl: 'https://rpc.ankr.com/eth?$_ankrAccessQuery',
+    rpcUrl: 'https://eth.llamarpc.com',
     chainId: 1,
     symbol: 'ETH',
   );
@@ -660,7 +657,7 @@ class NetworkConfiguration {
   static const sepolia = NetworkConfiguration(
     id: 'sepolia',
     name: 'Ethereum Sepolia Testnet',
-    rpcUrl: 'https://rpc.ankr.com/eth_sepolia?$_ankrAccessQuery',
+    rpcUrl: 'https://ethereum-sepolia.publicnode.com',
     chainId: 11155111,
     symbol: 'ETH',
   );

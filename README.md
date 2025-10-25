@@ -41,10 +41,10 @@ flutter run -d windows
 
 ## RPC-узлы
 
-По умолчанию используется публичная инфраструктура Ankr:
+По умолчанию используются публичные RPC-узлы:
 
-- Mainnet: `https://rpc.ankr.com/eth`
-- Sepolia: `https://rpc.ankr.com/eth_sepolia`
+- Mainnet: `https://eth.llamarpc.com`
+- Sepolia: `https://ethereum-sepolia.publicnode.com`
 
 Вы можете изменить адреса RPC при необходимости в `lib/main.dart` (класс `NetworkConfiguration`).
 
