@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:blockchain_utils/blockchain_utils.dart';
 import 'package:flutter/material.dart';
@@ -162,6 +163,16 @@ class _WalletHomePageState extends State<WalletHomePage> {
                   balance: balance,
                   isLoadingBalance: _controller.isRefreshingBalance,
                   onDelete: _controller.deleteWallet,
+                  onViewTransactions: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => TransactionHistoryPage(
+                          address: wallet.address,
+                          network: _controller.selectedNetwork,
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 const SizedBox(height: 24),
                 _TransactionForm(
@@ -476,12 +487,14 @@ class WalletInfoCard extends StatelessWidget {
     required this.balance,
     required this.isLoadingBalance,
     required this.onDelete,
+    this.onViewTransactions,
   });
 
   final WalletData wallet;
   final String balance;
   final bool isLoadingBalance;
   final Future<void> Function() onDelete;
+  final VoidCallback? onViewTransactions;
 
   @override
   Widget build(BuildContext context) {
@@ -559,6 +572,14 @@ class WalletInfoCard extends StatelessWidget {
                 ),
               ],
             ),
+            if (onViewTransactions != null) ...[
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: onViewTransactions,
+                icon: const Icon(Icons.receipt_long),
+                label: const Text('Просмотр транзакций'),
+              ),
+            ],
             const SizedBox(height: 12),
             FilledButton.tonal(
               onPressed: () async {
@@ -968,6 +989,7 @@ class NetworkConfiguration {
     required this.rpcUrl,
     required this.chainId,
     required this.symbol,
+    required this.explorerApiUrl,
   });
 
   final String id;
@@ -975,6 +997,7 @@ class NetworkConfiguration {
   final String rpcUrl;
   final int chainId;
   final String symbol;
+  final String explorerApiUrl;
 
   static const mainnet = NetworkConfiguration(
     id: 'mainnet',
@@ -982,6 +1005,7 @@ class NetworkConfiguration {
     rpcUrl: 'https://ethereum.publicnode.com',
     chainId: 1,
     symbol: 'ETH',
+    explorerApiUrl: 'https://eth.blockscout.com/api',
   );
 
   static const sepolia = NetworkConfiguration(
@@ -990,6 +1014,7 @@ class NetworkConfiguration {
     rpcUrl: 'https://ethereum-sepolia.publicnode.com',
     chainId: 11155111,
     symbol: 'ETH',
+    explorerApiUrl: 'https://eth-sepolia.blockscout.com/api',
   );
 
   static List<NetworkConfiguration> get supportedNetworks => const [
@@ -1012,6 +1037,359 @@ class AmountParser {
     final truncatedFraction = paddedFraction.substring(0, 18);
     final weiString = whole + truncatedFraction;
     return BigInt.parse(weiString);
+  }
+}
+
+class TransactionEntry {
+  TransactionEntry({
+    required this.hash,
+    required this.from,
+    this.to,
+    required this.value,
+    required this.gasUsed,
+    required this.gasPrice,
+    required this.timestamp,
+  });
+
+  final String hash;
+  final EthereumAddress from;
+  final EthereumAddress? to;
+  final EtherAmount value;
+  final int gasUsed;
+  final EtherAmount gasPrice;
+  final DateTime timestamp;
+
+  factory TransactionEntry.fromJson(Map<String, dynamic> json) {
+    final fromValue = json['from']?.toString();
+    if (fromValue == null || fromValue.isEmpty) {
+      throw const FormatException('Отсутствует адрес отправителя.');
+    }
+    final toValue = json['to']?.toString();
+    final valueString = json['value']?.toString() ?? '0';
+    final gasPriceString = json['gasPrice']?.toString() ?? '0';
+    final gasUsedString = json['gasUsed']?.toString() ?? json['gas']?.toString();
+    final timestampString = json['timeStamp']?.toString() ?? '0';
+
+    final timestampSeconds = int.tryParse(timestampString) ?? 0;
+    final gasUsed = int.tryParse(gasUsedString ?? '0') ?? 0;
+
+    EthereumAddress? toAddress;
+    if (toValue != null && toValue.isNotEmpty) {
+      toAddress = EthereumAddress.fromHex(toValue);
+    }
+
+    return TransactionEntry(
+      hash: json['hash']?.toString() ?? '',
+      from: EthereumAddress.fromHex(fromValue),
+      to: toAddress,
+      value: EtherAmount.inWei(BigInt.tryParse(valueString) ?? BigInt.zero),
+      gasUsed: gasUsed,
+      gasPrice:
+          EtherAmount.inWei(BigInt.tryParse(gasPriceString) ?? BigInt.zero),
+      timestamp: DateTime.fromMillisecondsSinceEpoch(
+        timestampSeconds * 1000,
+        isUtc: true,
+      ),
+    );
+  }
+}
+
+class TransactionHistoryService {
+  const TransactionHistoryService();
+
+  Future<List<TransactionEntry>> fetchRecentTransactions({
+    required NetworkConfiguration network,
+    required EthereumAddress address,
+    int limit = 100,
+  }) async {
+    final uri = Uri.parse(network.explorerApiUrl).replace(
+      queryParameters: {
+        'module': 'account',
+        'action': 'txlist',
+        'address': address.hexEip55,
+        'startblock': '0',
+        'endblock': '99999999',
+        'page': '1',
+        'offset': limit.toString(),
+        'sort': 'desc',
+      },
+    );
+
+    final response = await http.get(uri);
+    if (response.statusCode != 200) {
+      throw StateError(
+        'Сервис вернул статус ${response.statusCode}. Попробуйте позже.',
+      );
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('Некорректный ответ от сервиса блокчейна.');
+    }
+
+    final status = decoded['status']?.toString();
+    if (status != null && status != '1') {
+      final message = decoded['message']?.toString() ?? '';
+      if (message.toLowerCase().contains('no transactions')) {
+        return const [];
+      }
+      final errorDetails = decoded['result']?.toString() ?? message;
+      throw StateError('Сервис вернул ошибку: $errorDetails');
+    }
+
+    final result = decoded['result'];
+    if (result is! List) {
+      throw const FormatException('Не удалось разобрать список транзакций.');
+    }
+
+    return result.map((item) {
+      if (item is Map<String, dynamic>) {
+        return TransactionEntry.fromJson(item);
+      }
+      if (item is Map) {
+        return TransactionEntry.fromJson(
+          Map<String, dynamic>.from(item as Map<Object?, Object?>),
+        );
+      }
+      throw const FormatException('Неверный формат элемента транзакции.');
+    }).toList();
+  }
+}
+
+class TransactionHistoryPage extends StatefulWidget {
+  const TransactionHistoryPage({
+    super.key,
+    required this.address,
+    required this.network,
+  });
+
+  final EthereumAddress address;
+  final NetworkConfiguration network;
+
+  @override
+  State<TransactionHistoryPage> createState() => _TransactionHistoryPageState();
+}
+
+class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
+  final TransactionHistoryService _service = const TransactionHistoryService();
+  List<TransactionEntry>? _transactions;
+  Object? _error;
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadTransactions());
+  }
+
+  Future<void> _loadTransactions() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      final items = await _service.fetchRecentTransactions(
+        network: widget.network,
+        address: widget.address,
+        limit: 100,
+      );
+      if (!mounted) return;
+      setState(() {
+        _transactions = items;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error;
+        _transactions = null;
+      });
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Транзакции'),
+        actions: [
+          IconButton(
+            tooltip: 'Обновить список',
+            onPressed: _isLoading ? null : _loadTransactions,
+            icon: _isLoading
+                ? const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          if (_isLoading && _transactions != null)
+            const LinearProgressIndicator(minHeight: 2),
+          Expanded(child: _buildBody()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Не удалось загрузить транзакции: $_error',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: _isLoading ? null : _loadTransactions,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Повторить попытку'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final transactions = _transactions;
+    if (transactions == null) {
+      if (_isLoading) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      return const Center(child: Text('Нет данных для отображения.'));
+    }
+
+    if (transactions.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('Для этого адреса ещё нет транзакций.'),
+        ),
+      );
+    }
+
+    return _TransactionsTable(
+      transactions: transactions,
+      symbol: widget.network.symbol,
+    );
+  }
+}
+
+class _TransactionsTable extends StatelessWidget {
+  const _TransactionsTable({
+    required this.transactions,
+    required this.symbol,
+  });
+
+  final List<TransactionEntry> transactions;
+  final String symbol;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scrollbar(
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              columns: const [
+                DataColumn(label: Text('Дата')),
+                DataColumn(label: Text('Откуда')),
+                DataColumn(label: Text('Куда')),
+                DataColumn(label: Text('Сумма')),
+                DataColumn(label: Text('Газ')),
+              ],
+              rows: transactions
+                  .map(
+                    (transaction) => DataRow(
+                      cells: [
+                        DataCell(Text(_formatDate(transaction.timestamp))),
+                        DataCell(_AddressCell(transaction.from.hexEip55)),
+                        DataCell(
+                          _AddressCell(
+                            transaction.to?.hexEip55 ?? '—',
+                          ),
+                        ),
+                        DataCell(
+                          Text(
+                            '${_formatValue(transaction.value)} $symbol',
+                          ),
+                        ),
+                        DataCell(
+                          Text(
+                            '${transaction.gasUsed} @ '
+                            '${_formatGasPrice(transaction.gasPrice)} Gwei',
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _formatDate(DateTime dateTime) {
+    final local = dateTime.toLocal();
+    final twoDigits = (int value) => value.toString().padLeft(2, '0');
+    final date =
+        '${local.year}-${twoDigits(local.month)}-${twoDigits(local.day)}';
+    final time =
+        '${twoDigits(local.hour)}:${twoDigits(local.minute)}:${twoDigits(local.second)}';
+    return '$date $time';
+  }
+
+  static String _formatValue(EtherAmount amount) {
+    final value = amount.getValueInUnit(EtherUnit.ether);
+    if (value == 0) {
+      return '0';
+    }
+    if (value >= 1) {
+      return value.toStringAsFixed(6);
+    }
+    return value.toStringAsFixed(8);
+  }
+
+  static String _formatGasPrice(EtherAmount gasPrice) {
+    final gwei = gasPrice.getValueInUnit(EtherUnit.gwei);
+    return gwei.toStringAsFixed(2);
+  }
+}
+
+class _AddressCell extends StatelessWidget {
+  const _AddressCell(this.value);
+
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 220),
+      child: SelectableText(
+        value,
+        style: const TextStyle(fontSize: 13),
+      ),
+    );
   }
 }
 
