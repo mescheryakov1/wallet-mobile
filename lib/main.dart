@@ -1,11 +1,10 @@
 import 'dart:async';
-import 'dart:math';
 
+import 'package:blockchain_utils/blockchain_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:web3dart/crypto.dart';
 import 'package:web3dart/web3dart.dart';
 
 void main() {
@@ -528,6 +527,28 @@ class WalletInfoCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: SelectableText(
+                    wallet.mnemonic != null
+                        ? 'Фраза восстановления:\n${wallet.mnemonic!}'
+                        : 'Фраза восстановления недоступна для этого кошелька.',
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.copy),
+                  tooltip: 'Скопировать фразу восстановления',
+                  onPressed: wallet.mnemonic == null
+                      ? null
+                      : () {
+                          ClipboardHelper.copy(context, wallet.mnemonic!);
+                        },
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
               children: [
                 Expanded(
                   child: isLoadingBalance
@@ -613,7 +634,11 @@ class WalletController extends ChangeNotifier {
     try {
       final storedKey = await _storage.readPrivateKey();
       if (storedKey != null) {
-        await _loadWalletFromKey(storedKey);
+        final storedMnemonic = await _storage.readMnemonic();
+        await _loadWalletFromKey(
+          storedKey,
+          mnemonic: storedMnemonic,
+        );
         try {
           await refreshBalance();
         } catch (_) {
@@ -650,11 +675,22 @@ class WalletController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final credentials = EthPrivateKey.createRandom(Random.secure());
+      final mnemonic = Bip39MnemonicGenerator(Bip39Languages.english)
+          .fromWordsNumber(Bip39WordsNum.wordsNum24);
+      final seed = Bip39SeedGenerator(mnemonic).generate();
+      final derivation =
+          Bip44.fromSeed(seed, Bip44Coins.ethereum).deriveDefaultPath;
+      final privateKeyHex =
+          BytesUtils.toHexString(derivation.privateKey.raw, prefix: '0x');
+      final credentials = EthPrivateKey.fromHex(privateKeyHex);
       final address = await credentials.extractAddress();
-      final privateKeyHex = bytesToHex(credentials.privateKey, include0x: true);
-      await _storage.savePrivateKey(privateKeyHex);
-      wallet = WalletData(privateKey: privateKeyHex, address: address);
+      final mnemonicPhrase = mnemonic.toStr();
+      await _storage.savePrivateKey(privateKeyHex, mnemonic: mnemonicPhrase);
+      wallet = WalletData(
+        privateKey: privateKeyHex,
+        address: address,
+        mnemonic: mnemonicPhrase,
+      );
       notifyListeners();
       await refreshBalance();
     } finally {
@@ -790,10 +826,14 @@ class WalletController extends ChangeNotifier {
     }
   }
 
-  Future<void> _loadWalletFromKey(String privateKey) async {
+  Future<void> _loadWalletFromKey(String privateKey, {String? mnemonic}) async {
     final credentials = EthPrivateKey.fromHex(privateKey);
     final address = await credentials.extractAddress();
-    wallet = WalletData(privateKey: privateKey, address: address);
+    wallet = WalletData(
+      privateKey: privateKey,
+      address: address,
+      mnemonic: mnemonic,
+    );
   }
 
   String _normalizePrivateKey(String value) {
@@ -827,28 +867,43 @@ class WalletController extends ChangeNotifier {
 
 class WalletStorage {
   static const _privateKeyKey = 'wallet_private_key';
+  static const _mnemonicKey = 'wallet_mnemonic';
 
   Future<String?> readPrivateKey() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_privateKeyKey);
   }
 
-  Future<void> savePrivateKey(String value) async {
+  Future<String?> readMnemonic() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_mnemonicKey);
+  }
+
+  Future<void> savePrivateKey(String value, {String? mnemonic}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_privateKeyKey, value);
+    if (mnemonic != null) {
+      await prefs.setString(_mnemonicKey, mnemonic);
+    }
   }
 
   Future<void> clear() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_privateKeyKey);
+    await prefs.remove(_mnemonicKey);
   }
 }
 
 class WalletData {
-  WalletData({required this.privateKey, required this.address});
+  WalletData({
+    required this.privateKey,
+    required this.address,
+    this.mnemonic,
+  });
 
   final String privateKey;
   final EthereumAddress address;
+  final String? mnemonic;
 }
 
 class NetworkConfiguration {
