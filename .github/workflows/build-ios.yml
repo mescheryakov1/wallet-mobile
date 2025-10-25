@@ -65,7 +65,10 @@ jobs:
           }
 
           def flutter_root
-            generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+            generated_xcode_build_settings_path = File.expand_path(
+              File.join('Flutter', 'Generated.xcconfig'),
+              __FILE__
+            )
             unless File.exist?(generated_xcode_build_settings_path)
               abort("Generated.xcconfig must exist. If you're running pod install manually, run `flutter build ios` once or set FLUTTER_ROOT.")
             end
@@ -76,7 +79,10 @@ jobs:
             abort("FLUTTER_ROOT not found in Generated.xcconfig. Try deleting Generated.xcconfig, then run flutter pub get.")
           end
 
-          require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+          require File.expand_path(
+            File.join('packages', 'flutter_tools', 'bin', 'podhelper'),
+            flutter_root
+          )
 
           flutter_ios_podfile_setup
 
