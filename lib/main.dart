@@ -669,7 +669,7 @@ class NetworkConfiguration {
 }
 
 class AmountParser {
-  static final _amountRegex = RegExp(r'^([0-9]+)(?:\.([0-9]{1,18}))?\$');
+  static final _amountRegex = RegExp(r'^([0-9]+)(?:\.([0-9]{1,18}))?$');
 
   static BigInt parseEthToWei(String amount) {
     final match = _amountRegex.firstMatch(amount.trim());
