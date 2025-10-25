@@ -32,7 +32,7 @@ try {
     }
 
     Write-Host "Building Windows $Configuration bundle..." -ForegroundColor Cyan
-    flutter build windows --${Configuration.ToLower()}
+    flutter build windows --$($Configuration.ToLower())
 
     $buildOutput = Join-Path $repoRoot "build/windows/x64/runner/$Configuration"
     if (-not (Test-Path $buildOutput)) {
