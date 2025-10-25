@@ -154,6 +154,8 @@ class _WalletHomePageState extends State<WalletHomePage> {
                 _EmptyWallet(
                   onCreate: _controller.createWallet,
                   isCreating: _controller.isCreatingWallet,
+                  onImport: _controller.importWallet,
+                  isImporting: _controller.isImportingWallet,
                 )
               else ...[
                 WalletInfoCard(
@@ -257,39 +259,62 @@ class _TransactionForm extends StatelessWidget {
   }
 }
 
-class _EmptyWallet extends StatelessWidget {
+
+class _EmptyWallet extends StatefulWidget {
   const _EmptyWallet({
     required this.onCreate,
     required this.isCreating,
+    required this.onImport,
+    required this.isImporting,
   });
 
   final Future<void> Function() onCreate;
   final bool isCreating;
+  final Future<ActionResult> Function(String privateKey) onImport;
+  final bool isImporting;
+
+  @override
+  State<_EmptyWallet> createState() => _EmptyWalletState();
+}
+
+class _EmptyWalletState extends State<_EmptyWallet> {
+  final _privateKeyController = TextEditingController();
+  bool _obscurePrivateKey = true;
+
+  @override
+  void dispose() {
+    _privateKeyController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final isBusy = widget.isCreating || widget.isImporting;
+
     return Center(
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Icon(Icons.account_balance_wallet, size: 96),
           const SizedBox(height: 16),
           const Text(
             'Кошелёк не создан',
+            textAlign: TextAlign.center,
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           const Text(
-            'Нажмите кнопку, чтобы сгенерировать приватный ключ и адрес.',
+            'Создайте новый кошелёк или импортируйте ранее сохранённый приватный ключ.',
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 24),
           FilledButton.icon(
-            onPressed: isCreating
+            onPressed: isBusy
                 ? null
                 : () async {
                     final messenger = ScaffoldMessenger.of(context);
                     try {
-                      await onCreate();
+                      await widget.onCreate();
                       if (!context.mounted) return;
                       messenger.showSnackBar(
                         const SnackBar(content: Text('Новый кошелёк создан.')),
@@ -313,17 +338,89 @@ class _EmptyWallet extends StatelessWidget {
                       );
                     }
                 },
-            icon: isCreating
+            icon: widget.isCreating
                 ? const SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.add),
-            label: Text(isCreating ? 'Создание...' : 'Создать кошелёк'),
+            label:
+                Text(widget.isCreating ? 'Создание...' : 'Создать новый кошелёк'),
+          ),
+          const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 24),
+          const Text(
+            'Импорт приватного ключа',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Вставьте сохранённый приватный ключ, чтобы восстановить доступ к кошельку.',
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _privateKeyController,
+            decoration: InputDecoration(
+              labelText: 'Приватный ключ',
+              hintText: '0x...',
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _obscurePrivateKey ? Icons.visibility : Icons.visibility_off,
+                ),
+                onPressed: () {
+                  setState(() {
+                    _obscurePrivateKey = !_obscurePrivateKey;
+                  });
+                },
+              ),
+            ),
+            obscureText: _obscurePrivateKey,
+            enableSuggestions: false,
+            autocorrect: false,
+            textInputAction: TextInputAction.done,
+            enabled: !widget.isImporting,
+          ),
+          const SizedBox(height: 12),
+          FilledButton.tonalIcon(
+            onPressed: isBusy ? null : _handleImport,
+            icon: widget.isImporting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.download),
+            label: Text(widget.isImporting ? 'Импорт...' : 'Импортировать кошелёк'),
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _handleImport() async {
+    final privateKey = _privateKeyController.text.trim();
+    final messenger = ScaffoldMessenger.of(context);
+    if (privateKey.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Введите приватный ключ.')),
+      );
+      return;
+    }
+
+    final result = await widget.onImport(privateKey);
+    if (!mounted) return;
+
+    result.when(
+      success: (message) {
+        messenger.showSnackBar(SnackBar(content: Text(message)));
+        _privateKeyController.clear();
+      },
+      failure: (error) {
+        messenger.showSnackBar(SnackBar(content: Text(error)));
+      },
     );
   }
 }
@@ -485,11 +582,13 @@ class WalletController extends ChangeNotifier {
 
   bool isInitializing = true;
   bool isCreatingWallet = false;
+  bool isImportingWallet = false;
   bool isRefreshingBalance = false;
   bool isSending = false;
   bool isFetchingGasEstimate = false;
   static const int defaultGasLimit = 21000;
-  bool get isBusy => isRefreshingBalance || isSending || isCreatingWallet;
+  bool get isBusy =>
+      isRefreshingBalance || isSending || isCreatingWallet || isImportingWallet;
 
   String get formattedBalance {
     if (_balance == null) {
@@ -560,6 +659,27 @@ class WalletController extends ChangeNotifier {
       await refreshBalance();
     } finally {
       isCreatingWallet = false;
+      notifyListeners();
+    }
+  }
+
+  Future<ActionResult> importWallet(String privateKey) async {
+    isImportingWallet = true;
+    notifyListeners();
+
+    try {
+      final normalizedKey = _normalizePrivateKey(privateKey);
+      await _loadWalletFromKey(normalizedKey);
+      await _storage.savePrivateKey(normalizedKey);
+      notifyListeners();
+      await refreshBalance();
+      return const ActionResult.success('Кошелёк импортирован.');
+    } on FormatException catch (error) {
+      return ActionResult.failure('Некорректный приватный ключ: ${error.message}');
+    } catch (error) {
+      return ActionResult.failure('Не удалось импортировать приватный ключ: $error');
+    } finally {
+      isImportingWallet = false;
       notifyListeners();
     }
   }
@@ -674,6 +794,25 @@ class WalletController extends ChangeNotifier {
     final credentials = EthPrivateKey.fromHex(privateKey);
     final address = await credentials.extractAddress();
     wallet = WalletData(privateKey: privateKey, address: address);
+  }
+
+  String _normalizePrivateKey(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      throw const FormatException('Приватный ключ не должен быть пустым.');
+    }
+    final sanitized = trimmed.replaceAll(RegExp(r'\s+'), '');
+    final hasPrefix = sanitized.startsWith('0x') || sanitized.startsWith('0X');
+    final hex = hasPrefix ? sanitized.substring(2) : sanitized;
+    if (hex.length != 64) {
+      throw const FormatException('Приватный ключ должен содержать 64 символа.');
+    }
+    if (!RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex)) {
+      throw const FormatException(
+        'Приватный ключ должен содержать только hex-символы.',
+      );
+    }
+    return '0x${hex.toLowerCase()}';
   }
 
   Future<T> _withClient<T>(Future<T> Function(Web3Client client) action) async {
