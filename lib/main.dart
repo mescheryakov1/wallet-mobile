@@ -649,7 +649,7 @@ class NetworkConfiguration {
   static const mainnet = NetworkConfiguration(
     id: 'mainnet',
     name: 'Ethereum Mainnet',
-    rpcUrl: 'https://cloudflare-eth.com',
+    rpcUrl: 'https://ethereum.publicnode.com',
     chainId: 1,
     symbol: 'ETH',
   );

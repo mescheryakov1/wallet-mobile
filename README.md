@@ -43,7 +43,7 @@ flutter run -d windows
 
 По умолчанию используются публичные RPC-узлы:
 
-- Mainnet: `https://eth.llamarpc.com`
+- Mainnet: `https://ethereum.publicnode.com`
 - Sepolia: `https://ethereum-sepolia.publicnode.com`
 
 Вы можете изменить адреса RPC при необходимости в `lib/main.dart` (класс `NetworkConfiguration`).
