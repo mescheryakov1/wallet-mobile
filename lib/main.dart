@@ -220,6 +220,21 @@ class _TransactionForm extends StatelessWidget {
                 decimal: true,
               ),
             ),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.local_gas_station, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _state._controller.isFetchingGasEstimate
+                      ? const Text('Загрузка оценки газа...')
+                      : Text(
+                          'Расход газа: ${_state._controller.formattedGasEstimate}',
+                        ),
+                ),
+              ],
+            ),
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
@@ -456,11 +471,15 @@ class WalletController extends ChangeNotifier {
       NetworkConfiguration.supportedNetworks.first;
   WalletData? wallet;
   EtherAmount? _balance;
+  EtherAmount? _gasPrice;
+  EtherAmount? _gasFee;
 
   bool isInitializing = true;
   bool isCreatingWallet = false;
   bool isRefreshingBalance = false;
   bool isSending = false;
+  bool isFetchingGasEstimate = false;
+  static const int defaultGasLimit = 21000;
   bool get isBusy => isRefreshingBalance || isSending || isCreatingWallet;
 
   String get formattedBalance {
@@ -471,16 +490,38 @@ class WalletController extends ChangeNotifier {
     return '${value.toStringAsFixed(6)} ${selectedNetwork.symbol}';
   }
 
+  String get formattedGasEstimate {
+    if (_gasPrice == null || _gasFee == null) {
+      return '—';
+    }
+    final gasPriceGwei = _gasPrice!.getValueInUnit(EtherUnit.gwei);
+    final feeInEth = _gasFee!.getValueInUnit(EtherUnit.ether);
+    return '${defaultGasLimit} газа • '
+        '${feeInEth.toStringAsFixed(6)} ${selectedNetwork.symbol} '
+        '(цена газа ${gasPriceGwei.toStringAsFixed(2)} Gwei)';
+  }
+
   Future<void> initialize() async {
     try {
       final storedKey = await _storage.readPrivateKey();
       if (storedKey != null) {
         await _loadWalletFromKey(storedKey);
-        await refreshBalance();
+        try {
+          await refreshBalance();
+        } catch (_) {
+          // Ошибку покажем на действиях пользователя.
+        }
       }
     } catch (_) {
       // Ошибку покажем на действиях пользователя.
     } finally {
+      try {
+        if (_gasPrice == null || _gasFee == null) {
+          await refreshGasEstimate();
+        }
+      } catch (_) {
+        // Ошибку покажем при взаимодействии пользователя.
+      }
       isInitializing = false;
       notifyListeners();
     }
@@ -491,6 +532,8 @@ class WalletController extends ChangeNotifier {
     notifyListeners();
     if (wallet != null) {
       await refreshBalance();
+    } else {
+      await refreshGasEstimate();
     }
   }
 
@@ -537,6 +580,11 @@ class WalletController extends ChangeNotifier {
       isRefreshingBalance = false;
       notifyListeners();
     }
+    try {
+      await refreshGasEstimate();
+    } catch (_) {
+      // Ошибку покажем при пользовательском действии.
+    }
   }
 
   Future<ActionResult> sendTransaction({
@@ -580,11 +628,35 @@ class WalletController extends ChangeNotifier {
         );
       });
       await refreshBalance();
+      try {
+        await refreshGasEstimate();
+      } catch (_) {
+        // Ошибку покажем при пользовательском действии.
+      }
       return ActionResult.success(hash);
     } catch (error) {
       return ActionResult.failure('Не удалось отправить транзакцию: $error');
     } finally {
       isSending = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> refreshGasEstimate() async {
+    isFetchingGasEstimate = true;
+    notifyListeners();
+    try {
+      final gasPrice = await _withClient((client) => client.getGasPrice());
+      final gasPriceWei = gasPrice.getValueInUnitBI(EtherUnit.wei);
+      final totalFeeWei = gasPriceWei * BigInt.from(defaultGasLimit);
+      _gasPrice = gasPrice;
+      _gasFee = EtherAmount.inWei(totalFeeWei);
+    } catch (_) {
+      _gasPrice = null;
+      _gasFee = null;
+      rethrow;
+    } finally {
+      isFetchingGasEstimate = false;
       notifyListeners();
     }
   }
