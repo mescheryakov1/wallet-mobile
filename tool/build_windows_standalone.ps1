@@ -21,6 +21,8 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptRoot "..")
 Push-Location $repoRoot
 
+$stagingRoot = $null
+
 try {
     Assert-Command -Name flutter
 
