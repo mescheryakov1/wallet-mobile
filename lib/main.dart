@@ -412,14 +412,13 @@ class WalletInfoCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            SelectableText('Приватный ключ:\n${wallet.privateKey}'),
-            const SizedBox(height: 12),
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: isLoadingBalance
-                      ? const LinearProgressIndicator(minHeight: 4)
-                      : Text('Баланс: $balance'),
+                  child: SelectableText(
+                    'Приватный ключ:\n${wallet.privateKey}',
+                  ),
                 ),
                 IconButton(
                   icon: const Icon(Icons.copy_all),
@@ -427,6 +426,16 @@ class WalletInfoCard extends StatelessWidget {
                   onPressed: () {
                     ClipboardHelper.copy(context, wallet.privateKey);
                   },
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: isLoadingBalance
+                      ? const LinearProgressIndicator(minHeight: 4)
+                      : Text('Баланс: $balance'),
                 ),
               ],
             ),
