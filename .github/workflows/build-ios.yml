@@ -45,6 +45,12 @@ jobs:
       - name: Fetch platform assets
         run: bash tool/fetch_platform_assets.sh
 
+      - name: Prepare Flutter build settings
+        run: |
+          mkdir -p ios/Flutter
+          FLUTTER_SDK_PATH=$(dirname $(dirname $(which flutter)))
+          echo "FLUTTER_ROOT=${FLUTTER_SDK_PATH}" > ios/Flutter/Generated.xcconfig
+
       - name: Generate Podfile
         run: |
           cat > ios/Podfile << 'EOF'
@@ -59,7 +65,7 @@ jobs:
           }
 
           def flutter_root
-            generated_xcode_build_settings_path = File.expand_path(File.join('Flutter', 'Generated.xcconfig'), __FILE__)
+            generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
             unless File.exist?(generated_xcode_build_settings_path)
               abort("Generated.xcconfig must exist. If you're running pod install manually, run `flutter build ios` once or set FLUTTER_ROOT.")
             end
