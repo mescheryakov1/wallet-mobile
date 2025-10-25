@@ -351,19 +351,19 @@ class _EmptyWalletState extends State<_EmptyWallet> {
           const Divider(),
           const SizedBox(height: 24),
           const Text(
-            'Импорт приватного ключа',
+            'Импорт приватного ключа или фразы восстановления',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           const Text(
-            'Вставьте сохранённый приватный ключ, чтобы восстановить доступ к кошельку.',
+            'Вставьте сохранённый приватный ключ или фразу из 24 слов, чтобы восстановить доступ к кошельку.',
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _privateKeyController,
             decoration: InputDecoration(
-              labelText: 'Приватный ключ',
-              hintText: '0x...',
+              labelText: 'Приватный ключ или фраза восстановления',
+              hintText: '0x... или 24 слова',
               border: const OutlineInputBorder(),
               suffixIcon: IconButton(
                 icon: Icon(
@@ -404,7 +404,9 @@ class _EmptyWalletState extends State<_EmptyWallet> {
     final messenger = ScaffoldMessenger.of(context);
     if (privateKey.isEmpty) {
       messenger.showSnackBar(
-        const SnackBar(content: Text('Введите приватный ключ.')),
+        const SnackBar(
+          content: Text('Введите приватный ключ или фразу восстановления.'),
+        ),
       );
       return;
     }
@@ -704,16 +706,16 @@ class WalletController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final normalizedKey = _normalizePrivateKey(privateKey);
-      await _loadWalletFromKey(normalizedKey);
-      await _storage.savePrivateKey(normalizedKey);
+      final parsed = _parseImportInput(privateKey);
+      await _loadWalletFromKey(parsed.privateKey, mnemonic: parsed.mnemonic);
+      await _storage.savePrivateKey(parsed.privateKey, mnemonic: parsed.mnemonic);
       notifyListeners();
       await refreshBalance();
       return const ActionResult.success('Кошелёк импортирован.');
     } on FormatException catch (error) {
-      return ActionResult.failure('Некорректный приватный ключ: ${error.message}');
+      return ActionResult.failure('Некорректные данные: ${error.message}');
     } catch (error) {
-      return ActionResult.failure('Не удалось импортировать приватный ключ: $error');
+      return ActionResult.failure('Не удалось импортировать кошелёк: $error');
     } finally {
       isImportingWallet = false;
       notifyListeners();
@@ -855,6 +857,49 @@ class WalletController extends ChangeNotifier {
     return '0x${hex.toLowerCase()}';
   }
 
+  _ImportPayload _parseImportInput(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      throw const FormatException(
+        'Приватный ключ или фраза восстановления не должны быть пустыми.',
+      );
+    }
+
+    try {
+      final normalizedKey = _normalizePrivateKey(trimmed);
+      return _ImportPayload(privateKey: normalizedKey);
+    } on FormatException catch (error) {
+      final words = trimmed
+          .split(RegExp(r'\s+'))
+          .where((word) => word.isNotEmpty)
+          .toList();
+      final wordCount = words.length;
+
+      if (Bip39WordsNum.fromValue(wordCount) == null) {
+        throw error;
+      }
+
+      final normalizedMnemonic =
+          words.map((word) => word.toLowerCase()).join(' ');
+      final validator = Bip39MnemonicValidator(Bip39Languages.english);
+      if (!validator.validateWords(normalizedMnemonic)) {
+        throw const FormatException('Некорректная фраза восстановления.');
+      }
+
+      final mnemonic = Bip39Mnemonic.fromString(normalizedMnemonic);
+      final seed = Bip39SeedGenerator(mnemonic).generate();
+      final derivation =
+          Bip44.fromSeed(seed, Bip44Coins.ethereum).deriveDefaultPath;
+      final privateKeyHex =
+          BytesUtils.toHexString(derivation.privateKey.raw, prefix: '0x');
+
+      return _ImportPayload(
+        privateKey: privateKeyHex,
+        mnemonic: mnemonic.toStr(),
+      );
+    }
+  }
+
   Future<T> _withClient<T>(Future<T> Function(Web3Client client) action) async {
     final client = Web3Client(selectedNetwork.rpcUrl, http.Client());
     try {
@@ -863,6 +908,16 @@ class WalletController extends ChangeNotifier {
       client.dispose();
     }
   }
+}
+
+class _ImportPayload {
+  const _ImportPayload({
+    required this.privateKey,
+    this.mnemonic,
+  });
+
+  final String privateKey;
+  final String? mnemonic;
 }
 
 class WalletStorage {
