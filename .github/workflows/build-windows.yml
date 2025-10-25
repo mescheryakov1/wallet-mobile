@@ -1,0 +1,55 @@
+name: Build Windows Standalone
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.7'
+          channel: stable
+          architecture: x64
+          cache: true
+
+      - name: Restore pub cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\Pub\Cache
+            ~\AppData\Roaming\Pub\Cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Configure Flutter for Windows
+        run: flutter config --no-analytics --enable-windows-desktop
+
+      - name: Fetch dependencies
+        run: flutter pub get
+
+      - name: Fetch platform assets
+        run: bash tool/fetch_platform_assets.sh
+        shell: bash
+
+      - name: Build standalone executable
+        run: ./tool/build_windows_standalone.ps1 -Configuration Release -OutputDirectory build/windows_standalone -SkipPubGet
+        shell: pwsh
+
+      - name: Upload Windows executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-mobile-windows-x86_64
+          path: build/windows_standalone/wallet-mobile-standalone.exe
+          if-no-files-found: error
