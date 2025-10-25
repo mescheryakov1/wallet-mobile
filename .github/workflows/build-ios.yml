@@ -45,6 +45,50 @@ jobs:
       - name: Fetch platform assets
         run: bash tool/fetch_platform_assets.sh
 
+      - name: Generate Podfile
+        run: |
+          cat > ios/Podfile << 'EOF'
+          platform :ios, '13.0'
+
+          # Отключаем метрику CocoaPods чтобы не тратить время раннера.
+          ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+          project 'Runner', {
+            'Debug' => :debug,
+            'Profile' => :release,
+            'Release' => :release,
+          }
+
+          def flutter_root
+            generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+            unless File.exist?(generated_xcode_build_settings_path)
+              abort("Generated.xcconfig must exist. If you're running pod install manually, run `flutter build ios` once or set FLUTTER_ROOT.")
+            end
+            File.foreach(generated_xcode_build_settings_path) do |line|
+              matches = line.match(/FLUTTER_ROOT\=(.*)/)
+              return matches[1].strip if matches
+            end
+            abort("FLUTTER_ROOT not found in Generated.xcconfig. Try deleting Generated.xcconfig, then run flutter pub get.")
+          end
+
+          require File.expand_path(File.join(flutter_root, 'packages', 'flutter_tools', 'bin', 'podhelper'), __FILE__)
+
+          flutter_ios_podfile_setup
+
+          target 'Runner' do
+            use_frameworks!
+            use_modular_headers!
+
+            flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+          end
+
+          post_install do |installer|
+            installer.pods_project.targets.each do |target|
+              flutter_additional_ios_build_settings(target)
+            end
+          end
+          EOF
+
       - name: Build unsigned IPA
         run: bash tool/ci-ios-build.sh
 
