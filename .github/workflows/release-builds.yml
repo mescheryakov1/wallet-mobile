@@ -1,0 +1,250 @@
+name: Release Platform Builds
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    name: Build Android Release Artifact
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.7'
+          channel: stable
+          cache: true
+
+      - name: Restore pub cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Restore Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Check Flutter version
+        run: flutter --version
+
+      - name: Ensure Android SDK environment
+        run: |
+          if [ -z "${ANDROID_HOME:-}" ]; then
+            if [ -n "${ANDROID_SDK_ROOT:-}" ]; then
+              echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+            else
+              echo "ANDROID_HOME and ANDROID_SDK_ROOT are not set" >&2
+              exit 1
+            fi
+          else
+            echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Prepare Android environment
+        run: |
+          flutter config --no-analytics
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses
+
+      - name: Fetch platform assets
+        run: bash tool/fetch_platform_assets.sh
+
+      - name: Build Android APK
+        run: bash tool/ci-android-build.sh
+
+      - name: Rename artifact for release
+        run: |
+          mkdir -p build/release
+          cp build/app/outputs/flutter-apk/app-release.apk "build/release/wallet-mobile-android-${{ github.event.release.tag_name }}.apk"
+
+      - name: Upload release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: build/release/wallet-mobile-android-${{ github.event.release.tag_name }}.apk
+          asset_name: wallet-mobile-android-${{ github.event.release.tag_name }}.apk
+          asset_content_type: application/vnd.android.package-archive
+
+  ios:
+    name: Build iOS Release Artifact
+    runs-on: macos-latest
+    env:
+      FLUTTER_VERSION: '3.35.7'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Restore shared build caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            ~/.gradle
+            ~/.cache/flutter
+            ~/Library/Caches/CocoaPods
+            ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-flutter-${{ env.FLUTTER_VERSION }}-${{ hashFiles('pubspec.lock', 'ios/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-flutter-${{ env.FLUTTER_VERSION }}-
+            ${{ runner.os }}-flutter-
+
+      - name: Disable Flutter analytics
+        run: flutter config --no-analytics
+
+      - name: Fetch platform assets
+        run: bash tool/fetch_platform_assets.sh
+
+      - name: Generate Podfile
+        run: |
+          mkdir -p ios
+          FLUTTER_SDK_PATH=$(dirname $(dirname $(which flutter)))
+
+          cat > ios/Podfile << EOF
+          platform :ios, '13.0'
+
+          ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+          project 'Runner', {
+            'Debug' => :debug,
+            'Profile' => :release,
+            'Release' => :release,
+          }
+
+          # Жестко задаем flutter_root. Больше не читаем Generated.xcconfig.
+          def flutter_root
+            return "${FLUTTER_SDK_PATH}"
+          end
+
+          require File.expand_path(
+            File.join('packages', 'flutter_tools', 'bin', 'podhelper'),
+            flutter_root
+          )
+
+          flutter_ios_podfile_setup
+
+          target 'Runner' do
+            use_frameworks!
+            use_modular_headers!
+
+            flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+          end
+
+          post_install do |installer|
+            installer.pods_project.targets.each do |target|
+              flutter_additional_ios_build_settings(target)
+            end
+          end
+          EOF
+
+      - name: Build unsigned IPA
+        run: bash tool/ci-ios-build.sh
+
+      - name: Rename artifact for release
+        run: |
+          mkdir -p build/release
+          ipa_path=$(ls build/ios/ipa/*.ipa | head -n 1)
+          cp "$ipa_path" "build/release/wallet-mobile-ios-${{ github.event.release.tag_name }}.ipa"
+
+      - name: Upload release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: build/release/wallet-mobile-ios-${{ github.event.release.tag_name }}.ipa
+          asset_name: wallet-mobile-ios-${{ github.event.release.tag_name }}.ipa
+          asset_content_type: application/octet-stream
+
+  windows:
+    name: Build Windows Release Artifact
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.7'
+          channel: stable
+          architecture: x64
+          cache: true
+
+      - name: Restore pub cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\Pub\Cache
+            ~\AppData\Roaming\Pub\Cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Configure Flutter for Windows
+        run: flutter config --no-analytics --enable-windows-desktop
+
+      - name: Fetch dependencies
+        run: flutter pub get
+
+      - name: Fetch platform assets
+        run: bash tool/fetch_platform_assets.sh
+        shell: bash
+
+      - name: Build standalone executable
+        run: ./tool/build_windows_standalone.ps1 -Configuration Release -OutputDirectory build/windows_standalone -SkipPubGet
+        shell: pwsh
+
+      - name: Compress Windows bundle
+        run: |
+          Compress-Archive -Path build/windows_standalone/* -DestinationPath build/windows_standalone.zip -Force
+        shell: pwsh
+
+      - name: Rename artifact for release
+        run: |
+          New-Item -ItemType Directory -Path build/release -Force | Out-Null
+          Copy-Item build/windows_standalone.zip "build/release/wallet-mobile-windows-${{ github.event.release.tag_name }}.zip" -Force
+        shell: pwsh
+
+      - name: Upload release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: build/release/wallet-mobile-windows-${{ github.event.release.tag_name }}.zip
+          asset_name: wallet-mobile-windows-${{ github.event.release.tag_name }}.zip
+          asset_content_type: application/zip
