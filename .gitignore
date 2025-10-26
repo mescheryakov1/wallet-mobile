@@ -37,7 +37,6 @@ migrate_working_dir/
 android/app/src/main/res/mipmap-*/
 ios/Runner/Assets.xcassets/AppIcon.appiconset/*.png
 ios/Runner/Assets.xcassets/LaunchImage.imageset/*.png
-windows/runner/resources/app_icon.ico
 
 # Symbolication related
 app.*.symbols

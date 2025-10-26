@@ -21,6 +21,13 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptRoot "..")
 Push-Location $repoRoot
 
+$iconGenerator = Join-Path $scriptRoot 'generate_windows_app_icon.ps1'
+if (-not (Test-Path $iconGenerator)) {
+    throw "Required script '$iconGenerator' was not found."
+}
+
+& $iconGenerator
+
 $stagingRoot = $null
 
 try {
