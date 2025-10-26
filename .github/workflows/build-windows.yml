@@ -51,5 +51,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wallet-mobile-windows-x86_64
-          path: build/windows_standalone/wallet-mobile-standalone.exe
+          path: build/windows_standalone/wallet_mobile.exe
           if-no-files-found: error
