@@ -21,6 +21,13 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptRoot "..")
 Push-Location $repoRoot
 
+$iconGenerator = Join-Path $scriptRoot 'generate_windows_app_icon.ps1'
+if (-not (Test-Path $iconGenerator)) {
+    throw "Required script '$iconGenerator' was not found."
+}
+
+& $iconGenerator
+
 try {
     Assert-Command -Name flutter
 
@@ -30,101 +37,37 @@ try {
     }
 
     Write-Host "Building Windows $Configuration bundle..." -ForegroundColor Cyan
-    flutter build windows --${Configuration.ToLower()}
+    flutter build windows --$($Configuration.ToLower())
 
     $buildOutput = Join-Path $repoRoot "build/windows/x64/runner/$Configuration"
     if (-not (Test-Path $buildOutput)) {
         throw "Expected build output at '$buildOutput' was not found. Ensure that Flutter desktop tooling is installed."
     }
 
-    $stagingRoot = Join-Path ([IO.Path]::GetTempPath()) ("wallet_mobile_standalone_" + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $stagingRoot | Out-Null
-    Copy-Item -Path (Join-Path $buildOutput '*') -Destination $stagingRoot -Recurse -Force
-
     $entryExe = 'wallet_mobile.exe'
-    if (-not (Test-Path (Join-Path $stagingRoot $entryExe))) {
-        throw "Entry executable '$entryExe' was not found in staging directory."
+    $entryExePath = Join-Path $buildOutput $entryExe
+    if (-not (Test-Path $entryExePath)) {
+        throw "Entry executable '$entryExe' was not found in build directory."
     }
 
-    $resolvedOutputDir = Resolve-Path $OutputDirectory -ErrorAction SilentlyContinue
-    if (-not $resolvedOutputDir) {
-        $resolvedOutputDir = New-Item -ItemType Directory -Path $OutputDirectory -Force
-        $resolvedOutputDir = $resolvedOutputDir.FullName
-    } else {
-        $resolvedOutputDir = $resolvedOutputDir.Path
+    $resolvedOutputDir = [System.IO.Path]::GetFullPath($OutputDirectory)
+
+    if (-not (Test-Path $resolvedOutputDir)) {
+        New-Item -ItemType Directory -Path $resolvedOutputDir -Force | Out-Null
     }
 
-    $targetExecutable = Join-Path $resolvedOutputDir 'wallet-mobile-standalone.exe'
+    Write-Host "Preparing standalone bundle directory at '$resolvedOutputDir'..." -ForegroundColor Cyan
 
-    $iexpress = Join-Path $env:SystemRoot 'System32\iexpress.exe'
-    if (-not (Test-Path $iexpress)) {
-        throw "iexpress.exe was not found. The script must be executed on Windows where IExpress is available."
+    $existingItems = Get-ChildItem -Path $resolvedOutputDir -Force -ErrorAction SilentlyContinue
+    if ($existingItems) {
+        $existingItems | Remove-Item -Recurse -Force
     }
 
-    $files = Get-ChildItem -Path $stagingRoot -Recurse -File
-    if ($files.Count -eq 0) {
-        throw "No files found in staging directory '$stagingRoot'."
-    }
+    Copy-Item -Path (Join-Path $buildOutput '*') -Destination $resolvedOutputDir -Recurse -Force
 
-    $fileOptionLines = @()
-    $sourceFileLines = @()
-    for ($index = 0; $index -lt $files.Count; $index++) {
-        $relativePath = $files[$index].FullName.Substring($stagingRoot.Length + 1)
-        $relativePath = $relativePath -replace '/', '\\'
-        $fileKey = "FILE$index"
-        $fileOptionLines += "$fileKey=$relativePath"
-        $sourceFileLines += "$fileKey="
-    }
-
-    $sedContent = @"
-[Version]
-Class=IEXPRESS
-SEDVersion=3
-
-[Options]
-PackagePurpose=InstallApp
-ShowInstallProgramWindow=1
-HideExtractAnimation=0
-UseLongFileName=1
-WindowTitle=%WINDOW_TITLE%
-FriendlyName=%WINDOW_TITLE%
-AppLaunched=%ENTRY_EXE%
-PostInstallCmd=<None>
-AdminQuietInstCmd=
-UserQuietInstCmd=
-TargetName=%TARGET_PATH%
-SourceFiles=SourceFiles
-RebootMode=I
-$($fileOptionLines -join "`n")
-
-[Strings]
-WINDOW_TITLE=Wallet Mobile Standalone
-ENTRY_EXE=$entryExe
-TARGET_PATH=$targetExecutable
-SOURCEDIR=$stagingRoot
-
-[SourceFiles]
-SourceFiles0=%SOURCEDIR%
-
-[SourceFiles0]
-$($sourceFileLines -join "`n")
-"@
-
-    $sedPath = Join-Path $stagingRoot 'bundle.sed'
-    Set-Content -Path $sedPath -Value $sedContent -Encoding ASCII
-
-    Write-Host "Packaging standalone executable..." -ForegroundColor Cyan
-    & $iexpress /N $sedPath | Write-Output
-
-    if (-not (Test-Path $targetExecutable)) {
-        throw "IExpress did not produce the expected executable at '$targetExecutable'."
-    }
-
-    Write-Host "Standalone executable created at: $targetExecutable" -ForegroundColor Green
+    $targetExecutable = Join-Path $resolvedOutputDir $entryExe
+    Write-Host "Standalone bundle prepared. Entry executable: $targetExecutable" -ForegroundColor Green
 }
 finally {
     Pop-Location
-    if ($stagingRoot -and (Test-Path $stagingRoot)) {
-        Remove-Item -Recurse -Force $stagingRoot
-    }
 }
