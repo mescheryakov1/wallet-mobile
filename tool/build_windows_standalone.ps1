@@ -50,18 +50,23 @@ try {
         throw "Entry executable '$entryExe' was not found in build directory."
     }
 
-    $resolvedOutputDir = Resolve-Path $OutputDirectory -ErrorAction SilentlyContinue
-    if (-not $resolvedOutputDir) {
-        $resolvedOutputDir = New-Item -ItemType Directory -Path $OutputDirectory -Force
-        $resolvedOutputDir = $resolvedOutputDir.FullName
-    } else {
-        $resolvedOutputDir = $resolvedOutputDir.Path
+    $resolvedOutputDir = [System.IO.Path]::GetFullPath($OutputDirectory)
+
+    if (-not (Test-Path $resolvedOutputDir)) {
+        New-Item -ItemType Directory -Path $resolvedOutputDir -Force | Out-Null
     }
 
-    $targetExecutable = Join-Path $resolvedOutputDir $entryExe
-    Copy-Item -Path $entryExePath -Destination $targetExecutable -Force
+    Write-Host "Preparing standalone bundle directory at '$resolvedOutputDir'..." -ForegroundColor Cyan
 
-    Write-Host "Standalone executable copied to: $targetExecutable" -ForegroundColor Green
+    $existingItems = Get-ChildItem -Path $resolvedOutputDir -Force -ErrorAction SilentlyContinue
+    if ($existingItems) {
+        $existingItems | Remove-Item -Recurse -Force
+    }
+
+    Copy-Item -Path (Join-Path $buildOutput '*') -Destination $resolvedOutputDir -Recurse -Force
+
+    $targetExecutable = Join-Path $resolvedOutputDir $entryExe
+    Write-Host "Standalone bundle prepared. Entry executable: $targetExecutable" -ForegroundColor Green
 }
 finally {
     Pop-Location

@@ -47,9 +47,9 @@ jobs:
         run: ./tool/build_windows_standalone.ps1 -Configuration Release -OutputDirectory build/windows_standalone -SkipPubGet
         shell: pwsh
 
-      - name: Upload Windows executable artifact
+      - name: Upload Windows bundle artifact
         uses: actions/upload-artifact@v4
         with:
           name: wallet-mobile-windows-x86_64
-          path: build/windows_standalone/wallet_mobile.exe
+          path: build/windows_standalone/
           if-no-files-found: error
