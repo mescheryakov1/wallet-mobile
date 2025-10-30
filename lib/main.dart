@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:blockchain_utils/blockchain_utils.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web3dart/web3dart.dart';
 
+import 'local_wallet_api.dart';
 import 'wallet_connect_page.dart';
 void main() {
   runApp(const WalletApp());
@@ -624,7 +626,7 @@ class ClipboardHelper {
   }
 }
 
-class WalletController extends ChangeNotifier {
+class WalletController extends ChangeNotifier implements LocalWalletApi {
   WalletController({WalletStorage? storage})
     : _storage = storage ?? WalletStorage();
 
@@ -646,6 +648,27 @@ class WalletController extends ChangeNotifier {
   static const int defaultGasLimit = 21000;
   bool get isBusy =>
       isRefreshingBalance || isSending || isCreatingWallet || isImportingWallet;
+
+  @override
+  EthereumAddress? getAddress() => wallet?.address;
+
+  @override
+  int? getChainId() => selectedNetwork.chainId;
+
+  @override
+  Future<String?> signMessage(Uint8List messageBytes) {
+    // TODO: implement local message signing
+    return Future.value(null);
+  }
+
+  @override
+  Future<String?> sendEth({
+    required EthereumAddress to,
+    required EtherAmount value,
+  }) {
+    // TODO: implement local ETH transfer
+    return Future.value(null);
+  }
 
   String get formattedBalance {
     if (_balance == null) {
