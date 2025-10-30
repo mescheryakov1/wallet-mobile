@@ -433,10 +433,10 @@ packages:
     dependency: direct main
     description:
       name: uuid
-      sha256: b19463cb9b847bdfc7dbf8133d9702d0a0ecc4175335c4a75db211e0196f84b3
+      sha256: a5be9ef6618a7ac1e964353ef476418026db906c4facdedaa299b7a2e71690ff
       url: "https://pub.dev"
     source: hosted
-    version: "3.0.7"
+    version: "4.5.1"
   vector_math:
     dependency: transitive
     description:
