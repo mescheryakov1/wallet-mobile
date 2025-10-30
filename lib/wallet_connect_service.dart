@@ -4,7 +4,7 @@ import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart';
 import 'local_wallet_api.dart';
 
 const String _defaultWalletConnectProjectId =
-    String.fromEnvironment('WC_PROJECT_ID', defaultValue: '');
+    'ac79370327e3526ba018428bc44831f1';
 
 class WalletConnectService extends ChangeNotifier {
   WalletConnectService({
