@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:blockchain_utils/blockchain_utils.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,10 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web3dart/web3dart.dart';
+import 'package:web3dart/crypto.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:qr_code_tools/qr_code_tools.dart';
+import 'package:walletconnect_dart/walletconnect_dart.dart';
 
 void main() {
   runApp(const WalletApp());
@@ -50,8 +55,16 @@ class _WalletHomePageState extends State<WalletHomePage> {
   }
 
   void _handleControllerUpdate() {
-    if (mounted) {
-      setState(() {});
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+    final request = _controller.dequeueWalletConnectRequest();
+    if (request != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _showWalletConnectRequestDialog(request);
+      });
     }
   }
 
@@ -95,6 +108,101 @@ class _WalletHomePageState extends State<WalletHomePage> {
         );
       },
     );
+  }
+
+  Future<void> _scanWalletConnectQr() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final picker = ImagePicker();
+      final image = await picker.pickImage(source: ImageSource.camera);
+      if (image == null) {
+        return;
+      }
+      final decoded = await QrCodeToolsPlugin.decodeFrom(image.path);
+      final uri = decoded?.trim();
+      if (uri == null || uri.isEmpty) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('QR-код не распознан.')),
+        );
+        return;
+      }
+      final result = await _controller.connectToWalletConnect(uri);
+      if (!mounted) {
+        return;
+      }
+      result.when(
+        success: (message) => messenger.showSnackBar(
+          SnackBar(content: Text(message)),
+        ),
+        failure: (error) => messenger.showSnackBar(
+          SnackBar(content: Text(error)),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      messenger.showSnackBar(
+        SnackBar(content: Text('Ошибка сканирования QR-кода: $error')),
+      );
+    }
+  }
+
+  Future<void> _disconnectWalletConnect() async {
+    await _controller.disconnectWalletConnect();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('WalletConnect отключён.')),
+    );
+  }
+
+  Future<void> _showWalletConnectRequestDialog(
+      WalletConnectRequest request) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        final peer = _controller.walletConnectPeerMeta;
+        return WalletConnectApprovalDialog(
+          controller: _controller,
+          request: request,
+          peerMeta: peer,
+          network: _controller.selectedNetwork,
+        );
+      },
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    if (result == true) {
+      final response = await _controller.approveWalletConnectRequest(request);
+      if (!mounted) return;
+      response.when(
+        success: (message) => messenger.showSnackBar(
+          SnackBar(content: Text(message)),
+        ),
+        failure: (error) => messenger.showSnackBar(
+          SnackBar(content: Text(error)),
+        ),
+      );
+    } else {
+      final response = await _controller.rejectWalletConnectRequest(
+        request,
+        message: 'Отклонено пользователем.',
+      );
+      if (!mounted) return;
+      response.when(
+        success: (message) => messenger.showSnackBar(
+          SnackBar(content: Text(message)),
+        ),
+        failure: (error) => messenger.showSnackBar(
+          SnackBar(content: Text(error)),
+        ),
+      );
+    }
   }
 
   @override
@@ -178,6 +286,14 @@ class _WalletHomePageState extends State<WalletHomePage> {
                 _TransactionForm(
                   controller: this,
                   isSending: _controller.isSending,
+                ),
+                const SizedBox(height: 24),
+                WalletConnectSection(
+                  controller: _controller,
+                  onScanQr: _scanWalletConnectQr,
+                  onDisconnect: _controller.isWalletConnectConnected
+                      ? _disconnectWalletConnect
+                      : null,
                 ),
               ],
             ],
@@ -264,6 +380,302 @@ class _TransactionForm extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class WalletConnectSection extends StatelessWidget {
+  const WalletConnectSection({
+    required this.controller,
+    required this.onScanQr,
+    this.onDisconnect,
+  });
+
+  final WalletController controller;
+  final Future<void> Function() onScanQr;
+  final Future<void> Function()? onDisconnect;
+
+  @override
+  Widget build(BuildContext context) {
+    final isConnected = controller.isWalletConnectConnected;
+    final isConnecting = controller.isWalletConnectConnecting;
+    final pendingCount = controller.walletConnectPendingRequestCount;
+    final isProcessing = controller.isProcessingWalletConnectRequest;
+    final peer = controller.walletConnectPeerMeta;
+    final peerName = peer?.name ?? '';
+    final peerUrl = peer?.url ?? '';
+    final peerDescription = peer?.description ?? '';
+    final session = controller.walletConnectSession;
+
+    final status = isConnected
+        ? 'Подключено'
+        : isConnecting
+            ? 'Подключение...'
+            : 'Не подключено';
+
+    return Card(
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.qr_code_2),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'WalletConnect',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                if (isConnecting)
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text('Статус: $status'),
+            if (peer != null) ...[
+              if (peerName.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'dApp: $peerName',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ],
+              if (peerUrl.isNotEmpty)
+                Text(peerUrl),
+              if (peerDescription.isNotEmpty)
+                Text(peerDescription),
+            ],
+            if (session != null && session.accounts.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text('Аккаунты: ${session.accounts.join(', ')}'),
+              Text('Chain ID: ${session.chainId}'),
+            ],
+            if (pendingCount > 0 || isProcessing) ...[
+              const SizedBox(height: 8),
+              Text(
+                isProcessing
+                    ? 'Обрабатывается запрос от dApp...'
+                    : 'Ожидающих запросов: $pendingCount',
+              ),
+            ],
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: isConnecting ? null : () => unawaited(onScanQr()),
+                  icon: const Icon(Icons.qr_code_scanner),
+                  label: const Text('Сканировать QR'),
+                ),
+                if (onDisconnect != null)
+                  OutlinedButton.icon(
+                    onPressed: () => unawaited(onDisconnect!()),
+                    icon: const Icon(Icons.link_off),
+                    label: const Text('Отключить'),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class WalletConnectApprovalDialog extends StatelessWidget {
+  const WalletConnectApprovalDialog({
+    required this.controller,
+    required this.request,
+    required this.peerMeta,
+    required this.network,
+  });
+
+  final WalletController controller;
+  final WalletConnectRequest request;
+  final PeerMeta? peerMeta;
+  final NetworkConfiguration network;
+
+  @override
+  Widget build(BuildContext context) {
+    final isProcessing = controller.isProcessingWalletConnectRequest;
+    final title = (peerMeta?.name ?? '').isEmpty
+        ? 'Запрос WalletConnect'
+        : peerMeta!.name;
+
+    return AlertDialog(
+      title: Text(title),
+      content: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if ((peerMeta?.url ?? '').isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(peerMeta!.url!),
+              ),
+            if ((peerMeta?.description ?? '').isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(peerMeta!.description!),
+              ),
+            WalletConnectRequestDetails(
+              request: request,
+              networkSymbol: network.symbol,
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: isProcessing ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Отклонить'),
+        ),
+        FilledButton(
+          onPressed: isProcessing ? null : () => Navigator.of(context).pop(true),
+          child: isProcessing
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Подтвердить'),
+        ),
+      ],
+    );
+  }
+}
+
+class WalletConnectRequestDetails extends StatelessWidget {
+  const WalletConnectRequestDetails({
+    required this.request,
+    required this.networkSymbol,
+  });
+
+  final WalletConnectRequest request;
+  final String networkSymbol;
+
+  @override
+  Widget build(BuildContext context) {
+    switch (request.type) {
+      case WalletConnectRequestType.sendTransaction:
+        final tx = request.transaction!;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _RequestInfo(label: 'Отправитель', value: tx.from.hexEip55),
+            _RequestInfo(
+              label: 'Получатель',
+              value: tx.to?.hexEip55 ?? '—',
+            ),
+            if (tx.value != null)
+              _RequestInfo(
+                label: 'Сумма',
+                value: _formatEther(tx.value!),
+              ),
+            if (tx.gasLimit != null)
+              _RequestInfo(
+                label: 'Лимит газа',
+                value: tx.gasLimit!.toString(),
+              ),
+            if (tx.gasPrice != null)
+              _RequestInfo(
+                label: 'Цена газа',
+                value: _formatGas(tx.gasPrice!),
+              ),
+            if (tx.maxFeePerGas != null)
+              _RequestInfo(
+                label: 'Max fee per gas',
+                value: _formatGas(tx.maxFeePerGas!),
+              ),
+            if (tx.maxPriorityFeePerGas != null)
+              _RequestInfo(
+                label: 'Max priority fee',
+                value: _formatGas(tx.maxPriorityFeePerGas!),
+              ),
+            if (tx.nonce != null)
+              _RequestInfo(label: 'Nonce', value: tx.nonce!.toString()),
+            if (tx.dataHex != null && tx.dataHex!.isNotEmpty && tx.dataHex != '0x')
+              _RequestInfo(label: 'Данные', value: tx.dataHex!),
+          ],
+        );
+      case WalletConnectRequestType.personalSign:
+      case WalletConnectRequestType.ethSign:
+        final sign = request.sign!;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (sign.address != null)
+              _RequestInfo(
+                label: 'Адрес',
+                value: sign.address!.hexEip55,
+              ),
+            const SizedBox(height: 8),
+            const Text(
+              'Сообщение:',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
+            SelectableText(sign.preview),
+            const SizedBox(height: 8),
+            const Text(
+              'HEX:',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            SelectableText(sign.rawHex),
+          ],
+        );
+    }
+  }
+
+  String _formatEther(EtherAmount amount) {
+    final value = amount.getValueInUnit(EtherUnit.ether);
+    if (value == 0) {
+      return '0 $networkSymbol';
+    }
+    final decimals = value >= 1 ? 6 : 8;
+    return '${value.toStringAsFixed(decimals)} $networkSymbol';
+  }
+
+  String _formatGas(EtherAmount amount) {
+    final gwei = amount.getValueInUnit(EtherUnit.gwei);
+    return '${gwei.toStringAsFixed(2)} Gwei';
+  }
+}
+
+class _RequestInfo extends StatelessWidget {
+  const _RequestInfo({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 2),
+          SelectableText(value),
+        ],
       ),
     );
   }
@@ -630,9 +1042,17 @@ class WalletController extends ChangeNotifier {
   bool isRefreshingBalance = false;
   bool isSending = false;
   bool isFetchingGasEstimate = false;
+  WalletConnect? _walletConnect;
+  PeerMeta? walletConnectPeerMeta;
+  SessionStatus? walletConnectSession;
+  bool isWalletConnectConnecting = false;
+  bool isProcessingWalletConnectRequest = false;
+  final List<WalletConnectRequest> _walletConnectRequests = [];
   static const int defaultGasLimit = 21000;
   bool get isBusy =>
       isRefreshingBalance || isSending || isCreatingWallet || isImportingWallet;
+
+  bool get isWalletConnectConnected => _walletConnect?.connected ?? false;
 
   String get formattedBalance {
     if (_balance == null) {
@@ -652,6 +1072,15 @@ class WalletController extends ChangeNotifier {
         '${feeInEth.toStringAsFixed(6)} ${selectedNetwork.symbol} '
         '(цена газа ${gasPriceGwei.toStringAsFixed(2)} Gwei)';
   }
+
+  WalletConnectRequest? dequeueWalletConnectRequest() {
+    if (_walletConnectRequests.isEmpty) {
+      return null;
+    }
+    return _walletConnectRequests.removeAt(0);
+  }
+
+  int get walletConnectPendingRequestCount => _walletConnectRequests.length;
 
   Future<void> initialize() async {
     try {
@@ -747,6 +1176,7 @@ class WalletController extends ChangeNotifier {
     await _storage.clear();
     wallet = null;
     _balance = null;
+    await disconnectWalletConnect();
     notifyListeners();
   }
 
@@ -849,6 +1279,536 @@ class WalletController extends ChangeNotifier {
     }
   }
 
+  Future<ActionResult> connectToWalletConnect(String uri) async {
+    final currentWallet = wallet;
+    if (currentWallet == null) {
+      return const ActionResult.failure('Сначала создайте кошелёк.');
+    }
+    final trimmed = uri.trim();
+    if (trimmed.isEmpty) {
+      return const ActionResult.failure('QR-код не содержит данных WalletConnect.');
+    }
+
+    isWalletConnectConnecting = true;
+    notifyListeners();
+
+    try {
+      final existing = _walletConnect;
+      if (existing != null) {
+        unawaited(existing.killSession());
+      }
+      _clearWalletConnectSession(notify: false);
+
+      final connector = WalletConnect(
+        uri: trimmed,
+        clientMeta: const PeerMeta(
+          name: 'Wallet Mobile',
+          description: 'Кроссплатформенный эфир-кошелёк',
+          url: 'https://walletconnect.org',
+          icons: [
+            'https://walletconnect.org/walletconnect-logo.png',
+          ],
+        ),
+      );
+
+      _walletConnect = connector;
+      _registerWalletConnectListeners(connector);
+
+      return const ActionResult.success(
+        'Запрос на подключение отправлен. Подтвердите соединение в dApp.',
+      );
+    } catch (error) {
+      _clearWalletConnectSession(notify: false);
+      isWalletConnectConnecting = false;
+      notifyListeners();
+      return ActionResult.failure('Не удалось подключиться: $error');
+    }
+  }
+
+  Future<void> disconnectWalletConnect() async {
+    final connector = _walletConnect;
+    if (connector != null) {
+      try {
+        await connector.killSession();
+      } catch (_) {
+        // Игнорируем ошибки завершения сессии.
+      }
+    }
+    _clearWalletConnectSession();
+  }
+
+  Future<ActionResult> approveWalletConnectRequest(
+      WalletConnectRequest request) async {
+    final connector = _walletConnect;
+    final currentWallet = wallet;
+    if (connector == null || currentWallet == null) {
+      return const ActionResult.failure('Нет активного подключения WalletConnect.');
+    }
+
+    isProcessingWalletConnectRequest = true;
+    notifyListeners();
+
+    try {
+      switch (request.type) {
+        case WalletConnectRequestType.sendTransaction:
+          final txData = request.transaction!;
+          if (!_addressesEqual(txData.from, currentWallet.address)) {
+            await connector.rejectRequest(
+              id: request.id,
+              errorMessage:
+                  'Адрес отправителя не совпадает с активным кошельком.',
+            );
+            return const ActionResult.failure(
+              'Адрес отправителя не совпадает с текущим кошельком.',
+            );
+          }
+
+          final credentials = EthPrivateKey.fromHex(currentWallet.privateKey);
+          final transaction = Transaction(
+            from: txData.from,
+            to: txData.to,
+            maxGas: txData.gasLimit,
+            gasPrice: txData.gasPrice,
+            value: txData.value,
+            data: txData.data,
+            nonce: txData.nonce,
+            maxFeePerGas: txData.maxFeePerGas,
+            maxPriorityFeePerGas: txData.maxPriorityFeePerGas,
+          );
+
+          final hash = await _withClient((client) {
+            return client.sendTransaction(
+              credentials,
+              transaction,
+              chainId: selectedNetwork.chainId,
+            );
+          });
+
+          await connector.approveRequest(id: request.id, result: hash);
+          await refreshBalance();
+          try {
+            await refreshGasEstimate();
+          } catch (_) {
+            // Ошибку покажем при пользовательском действии.
+          }
+          return ActionResult.success('Транзакция отправлена: $hash');
+
+        case WalletConnectRequestType.personalSign:
+        case WalletConnectRequestType.ethSign:
+          final signData = request.sign!;
+          final requestedAddress = signData.address;
+          if (requestedAddress != null &&
+              !_addressesEqual(requestedAddress, currentWallet.address)) {
+            await connector.rejectRequest(
+              id: request.id,
+              errorMessage:
+                  'Адрес подписи не совпадает с активным кошельком.',
+            );
+            return const ActionResult.failure(
+              'Подписание невозможно: указан другой адрес.',
+            );
+          }
+
+          final credentials = EthPrivateKey.fromHex(currentWallet.privateKey);
+          Uint8List signatureBytes;
+          if (request.type == WalletConnectRequestType.personalSign) {
+            signatureBytes =
+                credentials.signPersonalMessageToUint8List(signData.bytes);
+          } else {
+            signatureBytes = credentials.signToUint8List(signData.bytes);
+          }
+          final signatureHex = bytesToHex(signatureBytes, include0x: true);
+          await connector.approveRequest(
+            id: request.id,
+            result: signatureHex,
+          );
+          return const ActionResult.success('Сообщение подписано.');
+      }
+    } catch (error) {
+      await connector.rejectRequest(
+        id: request.id,
+        errorMessage: '$error',
+      );
+      return ActionResult.failure('Не удалось обработать запрос: $error');
+    } finally {
+      isProcessingWalletConnectRequest = false;
+      notifyListeners();
+    }
+  }
+
+  Future<ActionResult> rejectWalletConnectRequest(
+    WalletConnectRequest request, {
+    String? message,
+  }) async {
+    final connector = _walletConnect;
+    if (connector == null) {
+      return const ActionResult.failure('Нет активного подключения WalletConnect.');
+    }
+
+    final errorMessage = message ?? 'Отклонено пользователем.';
+    await connector.rejectRequest(
+      id: request.id,
+      errorMessage: errorMessage,
+    );
+    return const ActionResult.success('Запрос отклонён.');
+  }
+
+  void _registerWalletConnectListeners(WalletConnect connector) {
+    connector.registerListeners(
+      onConnect: (status) {
+        walletConnectSession = status;
+        isWalletConnectConnecting = false;
+        notifyListeners();
+      },
+      onSessionUpdate: (update) {
+        walletConnectSession = update.status;
+        notifyListeners();
+      },
+      onDisconnect: () {
+        _clearWalletConnectSession();
+      },
+    );
+
+    connector.on<WCSessionRequest>('session_request', (request) async {
+      walletConnectPeerMeta = request.peerMeta;
+      notifyListeners();
+      final currentWallet = wallet;
+      if (currentWallet == null) {
+        await connector.rejectSession(message: 'Кошелёк не создан.');
+        return;
+      }
+
+      try {
+        await connector.approveSession(
+          chainId: selectedNetwork.chainId,
+          accounts: [currentWallet.address.hexEip55],
+        );
+      } catch (error) {
+        await connector.rejectSession(message: '$error');
+        _clearWalletConnectSession();
+      }
+    });
+
+    connector.on<JsonRpcRequest>(
+      'eth_sendTransaction',
+      _handleWalletConnectTransactionRequest,
+    );
+    connector.on<JsonRpcRequest>(
+      'personal_sign',
+      _handleWalletConnectPersonalSignRequest,
+    );
+    connector.on<JsonRpcRequest>(
+      'eth_sign',
+      _handleWalletConnectEthSignRequest,
+    );
+
+    const unsupportedMethods = [
+      'eth_signTransaction',
+      'eth_signTypedData',
+      'eth_signTypedData_v1',
+      'eth_signTypedData_v2',
+      'eth_signTypedData_v3',
+      'eth_signTypedData_v4',
+    ];
+    for (final method in unsupportedMethods) {
+      connector.on<JsonRpcRequest>(method, (request) {
+        _rejectWalletConnectRpcRequest(
+          request,
+          'Метод $method пока не поддерживается.',
+        );
+      });
+    }
+  }
+
+  void _handleWalletConnectTransactionRequest(JsonRpcRequest request) {
+    final params = request.params;
+    if (params == null || params.isEmpty) {
+      _rejectWalletConnectRpcRequest(
+        request,
+        'Некорректные параметры транзакции.',
+      );
+      return;
+    }
+
+    final first = params.first;
+    if (first is! Map) {
+      _rejectWalletConnectRpcRequest(
+        request,
+        'Некорректные параметры транзакции.',
+      );
+      return;
+    }
+
+    final raw = Map<String, dynamic>.from(first as Map);
+    final transaction = _parseWalletConnectTransaction(raw);
+    if (transaction == null) {
+      _rejectWalletConnectRpcRequest(
+        request,
+        'Не удалось обработать параметры транзакции.',
+      );
+      return;
+    }
+
+    _enqueueWalletConnectRequest(
+      WalletConnectRequest.transaction(
+        rpcRequest: request,
+        transaction: transaction,
+      ),
+    );
+  }
+
+  void _handleWalletConnectPersonalSignRequest(JsonRpcRequest request) {
+    final params = request.params ?? [];
+    if (params.isEmpty) {
+      _rejectWalletConnectRpcRequest(
+        request,
+        'Пустой запрос на подпись.',
+      );
+      return;
+    }
+
+    dynamic messageParam = params[0];
+    String? addressParam;
+    if (params.length > 1) {
+      addressParam = params[1] is String ? params[1] as String? : null;
+      if (_looksLikeAddress(messageParam) && !_looksLikeAddress(addressParam)) {
+        addressParam = params[0] as String?;
+        messageParam = params[1];
+      }
+    }
+
+    final signData = _buildWalletConnectSignData(messageParam, addressParam);
+    if (signData == null) {
+      _rejectWalletConnectRpcRequest(
+        request,
+        'Не удалось прочитать данные для подписи.',
+      );
+      return;
+    }
+
+    _enqueueWalletConnectRequest(
+      WalletConnectRequest.personalSign(
+        rpcRequest: request,
+        sign: signData,
+      ),
+    );
+  }
+
+  void _handleWalletConnectEthSignRequest(JsonRpcRequest request) {
+    final params = request.params ?? [];
+    if (params.length < 2) {
+      _rejectWalletConnectRpcRequest(
+        request,
+        'Некорректные параметры подписи.',
+      );
+      return;
+    }
+
+    final addressParam = params[0] is String ? params[0] as String? : null;
+    final messageParam = params[1];
+    final signData = _buildWalletConnectSignData(messageParam, addressParam);
+    if (signData == null) {
+      _rejectWalletConnectRpcRequest(
+        request,
+        'Не удалось прочитать данные для подписи.',
+      );
+      return;
+    }
+
+    _enqueueWalletConnectRequest(
+      WalletConnectRequest.ethSign(
+        rpcRequest: request,
+        sign: signData,
+      ),
+    );
+  }
+
+  WalletConnectTransactionData? _parseWalletConnectTransaction(
+      Map<String, dynamic> raw) {
+    final from = _parseEthereumAddress(raw['from']);
+    if (from == null) {
+      return null;
+    }
+    final to = _parseEthereumAddress(raw['to']);
+    final value = _parseBigInt(raw['value']);
+    final gas = _parseBigInt(raw['gas'] ?? raw['gasLimit']);
+    final gasPrice = _parseBigInt(raw['gasPrice']);
+    final maxFeePerGas = _parseBigInt(raw['maxFeePerGas']);
+    final maxPriorityFeePerGas = _parseBigInt(raw['maxPriorityFeePerGas']);
+    final nonce = _parseBigInt(raw['nonce']);
+    final dataField = raw['data'] ?? raw['input'];
+    final dataBytes = _parseHexBytes(dataField);
+
+    return WalletConnectTransactionData(
+      raw: raw,
+      from: from,
+      to: to,
+      value: value != null ? EtherAmount.inWei(value) : null,
+      gasLimit: gas?.toInt(),
+      gasPrice: gasPrice != null ? EtherAmount.inWei(gasPrice) : null,
+      maxFeePerGas:
+          maxFeePerGas != null ? EtherAmount.inWei(maxFeePerGas) : null,
+      maxPriorityFeePerGas: maxPriorityFeePerGas != null
+          ? EtherAmount.inWei(maxPriorityFeePerGas)
+          : null,
+      data: dataBytes?.bytes,
+      dataHex: dataBytes?.hex,
+      nonce: nonce?.toInt(),
+    );
+  }
+
+  WalletConnectSignData? _buildWalletConnectSignData(
+    dynamic message,
+    String? address,
+  ) {
+    final bytes = _parseMessageBytes(message);
+    if (bytes == null) {
+      return null;
+    }
+    final preview = _formatMessagePreview(bytes);
+    final hex = bytesToHex(bytes, include0x: true);
+    return WalletConnectSignData(
+      bytes: bytes,
+      preview: preview,
+      rawHex: hex,
+      address: _parseEthereumAddress(address),
+    );
+  }
+
+  void _enqueueWalletConnectRequest(WalletConnectRequest request) {
+    _walletConnectRequests.add(request);
+    notifyListeners();
+  }
+
+  void _rejectWalletConnectRpcRequest(
+    JsonRpcRequest request,
+    String message,
+  ) {
+    final connector = _walletConnect;
+    if (connector == null) {
+      return;
+    }
+    unawaited(connector.rejectRequest(id: request.id, errorMessage: message));
+  }
+
+  void _clearWalletConnectSession({bool notify = true}) {
+    _walletConnect = null;
+    walletConnectPeerMeta = null;
+    walletConnectSession = null;
+    _walletConnectRequests.clear();
+    isWalletConnectConnecting = false;
+    isProcessingWalletConnectRequest = false;
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  EthereumAddress? _parseEthereumAddress(dynamic value) {
+    if (value is! String || value.trim().isEmpty) {
+      return null;
+    }
+    try {
+      return EthereumAddress.fromHex(value);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  BigInt? _parseBigInt(dynamic value) {
+    if (value == null) {
+      return null;
+    }
+    if (value is BigInt) {
+      return value;
+    }
+    if (value is int) {
+      return BigInt.from(value);
+    }
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty) {
+        return null;
+      }
+      final hasPrefix = trimmed.startsWith('0x') || trimmed.startsWith('0X');
+      final cleaned = hasPrefix ? trimmed.substring(2) : trimmed;
+      if (cleaned.isEmpty) {
+        return BigInt.zero;
+      }
+      return BigInt.parse(cleaned, radix: hasPrefix ? 16 : 10);
+    }
+    return null;
+  }
+
+  _HexBytes? _parseHexBytes(dynamic value) {
+    if (value is! String || value.trim().isEmpty) {
+      return null;
+    }
+    final trimmed = value.trim();
+    final hasPrefix = trimmed.startsWith('0x') || trimmed.startsWith('0X');
+    final raw = hasPrefix ? trimmed.substring(2) : trimmed;
+    if (raw.isEmpty) {
+      return const _HexBytes(hex: '0x');
+    }
+    final even = raw.length.isOdd ? '0$raw' : raw;
+    final normalized = '0x$even';
+    try {
+      final bytes = Uint8List.fromList(hexToBytes(normalized));
+      return _HexBytes(hex: normalized, bytes: bytes);
+    } catch (_) {
+      return _HexBytes(hex: normalized);
+    }
+  }
+
+  Uint8List? _parseMessageBytes(dynamic value) {
+    if (value == null) {
+      return null;
+    }
+    if (value is Uint8List) {
+      return value;
+    }
+    if (value is List<int>) {
+      return Uint8List.fromList(value);
+    }
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.startsWith('0x') || trimmed.startsWith('0X')) {
+        final parsed = _parseHexBytes(trimmed);
+        return parsed?.bytes;
+      }
+      return Uint8List.fromList(utf8.encode(trimmed));
+    }
+    return null;
+  }
+
+  String _formatMessagePreview(Uint8List bytes) {
+    if (bytes.isEmpty) {
+      return '(пустое сообщение)';
+    }
+    try {
+      final decoded = utf8.decode(bytes, allowMalformed: true).trim();
+      if (decoded.isNotEmpty) {
+        return decoded.length > 140
+            ? '${decoded.substring(0, 140)}…'
+            : decoded;
+      }
+    } catch (_) {
+      // Игнорируем и покажем hex.
+    }
+    return '0x${bytesToHex(bytes)}';
+  }
+
+  bool _addressesEqual(EthereumAddress a, EthereumAddress b) {
+    return a.hexNo0x.toLowerCase() == b.hexNo0x.toLowerCase();
+  }
+
+  bool _looksLikeAddress(dynamic value) {
+    if (value is! String) {
+      return false;
+    }
+    final trimmed = value.trim();
+    return trimmed.startsWith('0x') && trimmed.length == 42;
+  }
+
   Future<void> _loadWalletFromKey(String privateKey, {String? mnemonic}) async {
     final credentials = EthPrivateKey.fromHex(privateKey);
     final address = await credentials.extractAddress();
@@ -921,6 +1881,16 @@ class WalletController extends ChangeNotifier {
     }
   }
 
+  @override
+  void dispose() {
+    final connector = _walletConnect;
+    if (connector != null) {
+      unawaited(connector.killSession());
+    }
+    _clearWalletConnectSession(notify: false);
+    super.dispose();
+  }
+
   Future<T> _withClient<T>(Future<T> Function(Web3Client client) action) async {
     final client = Web3Client(selectedNetwork.rpcUrl, http.Client());
     try {
@@ -929,6 +1899,92 @@ class WalletController extends ChangeNotifier {
       client.dispose();
     }
   }
+}
+
+enum WalletConnectRequestType {
+  sendTransaction,
+  personalSign,
+  ethSign,
+}
+
+class WalletConnectRequest {
+  WalletConnectRequest.transaction({
+    required this.rpcRequest,
+    required WalletConnectTransactionData transaction,
+  })  : type = WalletConnectRequestType.sendTransaction,
+        transaction = transaction,
+        sign = null;
+
+  WalletConnectRequest.personalSign({
+    required this.rpcRequest,
+    required WalletConnectSignData sign,
+  })  : type = WalletConnectRequestType.personalSign,
+        transaction = null,
+        sign = sign;
+
+  WalletConnectRequest.ethSign({
+    required this.rpcRequest,
+    required WalletConnectSignData sign,
+  })  : type = WalletConnectRequestType.ethSign,
+        transaction = null,
+        sign = sign;
+
+  final WalletConnectRequestType type;
+  final JsonRpcRequest rpcRequest;
+  final WalletConnectTransactionData? transaction;
+  final WalletConnectSignData? sign;
+
+  int get id => rpcRequest.id;
+  String get method => rpcRequest.method;
+}
+
+class WalletConnectTransactionData {
+  WalletConnectTransactionData({
+    required this.raw,
+    required this.from,
+    this.to,
+    this.value,
+    this.gasLimit,
+    this.gasPrice,
+    this.maxFeePerGas,
+    this.maxPriorityFeePerGas,
+    this.data,
+    this.dataHex,
+    this.nonce,
+  });
+
+  final Map<String, dynamic> raw;
+  final EthereumAddress from;
+  final EthereumAddress? to;
+  final EtherAmount? value;
+  final int? gasLimit;
+  final EtherAmount? gasPrice;
+  final EtherAmount? maxFeePerGas;
+  final EtherAmount? maxPriorityFeePerGas;
+  final Uint8List? data;
+  final String? dataHex;
+  final int? nonce;
+}
+
+class WalletConnectSignData {
+  WalletConnectSignData({
+    required this.bytes,
+    required this.preview,
+    required this.rawHex,
+    this.address,
+  });
+
+  final Uint8List bytes;
+  final String preview;
+  final String rawHex;
+  final EthereumAddress? address;
+}
+
+class _HexBytes {
+  const _HexBytes({required this.hex, this.bytes});
+
+  final String hex;
+  final Uint8List? bytes;
 }
 
 class _ImportPayload {
