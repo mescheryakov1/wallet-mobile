@@ -82,6 +82,13 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
                 },
               ),
             ),
+            const SizedBox(height: 24),
+            const Text(
+              'Debug info:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            Text('Last proposal: ${service.debugLastProposalLog}'),
+            Text('Last error: ${service.debugLastError}'),
           ],
         ),
       ),

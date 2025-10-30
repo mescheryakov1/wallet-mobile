@@ -19,6 +19,8 @@ class WalletConnectService extends ChangeNotifier {
 
   SignClient? _client;
   String _status = 'disconnected';
+  String debugLastProposalLog = '';
+  String debugLastError = '';
 
   String get status => _status;
 
@@ -100,7 +102,13 @@ class WalletConnectService extends ChangeNotifier {
 
     final requiredNamespaces = event.params.requiredNamespaces;
     debugPrint('WC Proposal namespaces: ${requiredNamespaces.keys.toList()}');
+    debugLastProposalLog =
+        'namespaces=${requiredNamespaces.keys.toList()}';
+    notifyListeners();
     if (requiredNamespaces.isEmpty) {
+      debugLastError =
+          'reject: UNSUPPORTED_NAMESPACE_KEY namespaces empty';
+      notifyListeners();
       await client.reject(
         id: event.id,
         reason: Errors.getSdkError(Errors.UNSUPPORTED_NAMESPACE_KEY),
@@ -118,6 +126,8 @@ class WalletConnectService extends ChangeNotifier {
 
     final address = walletApi.getAddress();
     if (address == null) {
+      debugLastError = 'reject: UNSUPPORTED_ACCOUNTS no address available';
+      notifyListeners();
       await client.reject(
         id: event.id,
         reason: Errors.getSdkError(Errors.UNSUPPORTED_ACCOUNTS),
@@ -129,6 +139,9 @@ class WalletConnectService extends ChangeNotifier {
     final walletChainId = walletApi.getChainId();
     final fallbackChain = walletChainId != null ? 'eip155:$walletChainId' : null;
     if (requestedChains.isEmpty && fallbackChain == null) {
+      debugLastError =
+          'reject: UNSUPPORTED_CHAINS requested=$requestedChains walletChainId=$walletChainId';
+      notifyListeners();
       await client.reject(
         id: event.id,
         reason: Errors.getSdkError(Errors.UNSUPPORTED_CHAINS),
@@ -148,10 +161,23 @@ class WalletConnectService extends ChangeNotifier {
       ),
     };
 
-    await client.approve(
-      id: event.id,
-      namespaces: namespaces,
-    );
+    debugLastProposalLog =
+        'approve namespaceKey=$namespaceKey requestedChains=$requestedChains '
+        'supportedChain=$supportedChain accounts=$supportedChain:${address.hexEip55}';
+    debugLastError = '';
+    notifyListeners();
+
+    try {
+      await client.approve(
+        id: event.id,
+        namespaces: namespaces,
+      );
+    } catch (e, st) {
+      debugLastError = 'approve threw: $e';
+      debugPrint('approve exception: $e\n$st');
+      notifyListeners();
+      return;
+    }
     debugPrint(
       'WC Proposal approved for $namespaceKey with $supportedChain; '
       'requested=$requestedChains',
