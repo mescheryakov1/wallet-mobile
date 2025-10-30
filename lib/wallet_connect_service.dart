@@ -47,7 +47,6 @@ class WalletConnectService extends ChangeNotifier {
       _client = await SignClient.createInstance(
         projectId: projectId,
         metadata: metadata,
-        logLevel: LogLevel.error,
       );
 
       _client!.onSessionProposal.subscribe(_onSessionProposal);
@@ -138,7 +137,6 @@ class WalletConnectService extends ChangeNotifier {
 
     final namespaces = <String, Namespace>{
       'eip155': Namespace(
-        chains: <String>[supportedChain],
         accounts: <String>['$supportedChain:${address.hexEip55}'],
         methods: requiredNamespace.methods,
         events: requiredNamespace.events,
@@ -148,7 +146,6 @@ class WalletConnectService extends ChangeNotifier {
     await client.approve(
       id: event.id,
       namespaces: namespaces,
-      sessionProperties: event.params.sessionProperties,
     );
 
     final dappName = event.params.proposer.metadata.name;
