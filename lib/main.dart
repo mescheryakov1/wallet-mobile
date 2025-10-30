@@ -1413,9 +1413,13 @@ class WalletController extends ChangeNotifier {
           Uint8List signatureBytes;
           if (request.type == WalletConnectRequestType.personalSign) {
             signatureBytes =
-                credentials.signPersonalMessageToUint8List(signData.bytes);
+                await credentials.signPersonalMessage(signData.bytes);
           } else {
-            signatureBytes = credentials.signToUint8List(signData.bytes);
+            final signature = await credentials.sign(
+              signData.bytes,
+              chainId: selectedNetwork.chainId,
+            );
+            signatureBytes = _signatureToUint8List(signature);
           }
           final signatureHex = bytesToHex(signatureBytes, include0x: true);
           await connector.approveRequest(
@@ -1454,20 +1458,18 @@ class WalletController extends ChangeNotifier {
   }
 
   void _registerWalletConnectListeners(WalletConnect connector) {
-    connector.registerListeners(
-      onConnect: (status) {
-        walletConnectSession = status;
-        isWalletConnectConnecting = false;
-        notifyListeners();
-      },
-      onSessionUpdate: (update) {
-        walletConnectSession = update.status;
-        notifyListeners();
-      },
-      onDisconnect: () {
-        _clearWalletConnectSession();
-      },
-    );
+    connector.on<SessionStatus>('connect', (status) {
+      walletConnectSession = status;
+      isWalletConnectConnecting = false;
+      notifyListeners();
+    });
+    connector.on<WCSessionUpdateResponse>('session_update', (update) {
+      walletConnectSession = update.status;
+      notifyListeners();
+    });
+    connector.on('disconnect', (_) {
+      _clearWalletConnectSession();
+    });
 
     connector.on<WCSessionRequest>('session_request', (request) async {
       walletConnectPeerMeta = request.peerMeta;
@@ -1673,6 +1675,17 @@ class WalletController extends ChangeNotifier {
       rawHex: hex,
       address: _parseEthereumAddress(address),
     );
+  }
+
+  Uint8List _signatureToUint8List(MsgSignature signature) {
+    final rBytes = intToBytes(signature.r, length: 32);
+    final sBytes = intToBytes(signature.s, length: 32);
+    final v = signature.v >= 27 ? signature.v : signature.v + 27;
+    return Uint8List.fromList([
+      ...rBytes,
+      ...sBytes,
+      v,
+    ]);
   }
 
   void _enqueueWalletConnectRequest(WalletConnectRequest request) {
