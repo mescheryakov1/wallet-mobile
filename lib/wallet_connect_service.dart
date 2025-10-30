@@ -125,8 +125,10 @@ class WalletConnectService extends ChangeNotifier {
       return;
     }
 
-    final chainId = walletApi.getChainId();
-    if (chainId == null) {
+    final requestedChains = requiredNamespace.chains ?? const [];
+    final walletChainId = walletApi.getChainId();
+    final fallbackChain = walletChainId != null ? 'eip155:$walletChainId' : null;
+    if (requestedChains.isEmpty && fallbackChain == null) {
       await client.reject(
         id: event.id,
         reason: Errors.getSdkError(Errors.UNSUPPORTED_CHAINS),
@@ -134,15 +136,9 @@ class WalletConnectService extends ChangeNotifier {
       return;
     }
 
-    final supportedChain = 'eip155:$chainId';
-    final requestedChains = requiredNamespace.chains ?? const [];
-    if (requestedChains.isNotEmpty && !requestedChains.contains(supportedChain)) {
-      await client.reject(
-        id: event.id,
-        reason: Errors.getSdkError(Errors.UNSUPPORTED_CHAINS),
-      );
-      return;
-    }
+    final supportedChain = requestedChains.isNotEmpty
+        ? requestedChains.first
+        : (fallbackChain ?? 'eip155:1');
 
     final namespaces = <String, Namespace>{
       namespaceKey: Namespace(
@@ -156,7 +152,10 @@ class WalletConnectService extends ChangeNotifier {
       id: event.id,
       namespaces: namespaces,
     );
-    debugPrint('WC Proposal approved for $namespaceKey with $supportedChain');
+    debugPrint(
+      'WC Proposal approved for $namespaceKey with $supportedChain; '
+      'requested=$requestedChains',
+    );
 
     final dappName = event.params.proposer.metadata.name;
     if (!activeSessions.contains(dappName)) {
