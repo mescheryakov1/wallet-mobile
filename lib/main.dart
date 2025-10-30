@@ -519,12 +519,13 @@ class WalletConnectApprovalDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isProcessing = controller.isProcessingWalletConnectRequest;
-    final title = (peerMeta?.name ?? '').isEmpty
-        ? 'Запрос WalletConnect'
-        : peerMeta!.name;
+
+    final titleText = (peerMeta?.name?.isNotEmpty ?? false)
+        ? peerMeta!.name!
+        : 'Запрос WalletConnect';
 
     return AlertDialog(
-      title: Text(title),
+      title: Text(titleText),
       content: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -533,12 +534,12 @@ class WalletConnectApprovalDialog extends StatelessWidget {
             if ((peerMeta?.url ?? '').isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: Text(peerMeta!.url!),
+                child: Text(peerMeta!.url ?? ''),
               ),
             if ((peerMeta?.description ?? '').isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: Text(peerMeta!.description!),
+                child: Text(peerMeta!.description ?? ''),
               ),
             WalletConnectRequestDetails(
               request: request,
@@ -1427,11 +1428,10 @@ class WalletController extends ChangeNotifier {
             signatureBytes =
                 await credentials.signPersonalMessage(signData.bytes);
           } else {
-            final signature = await credentials.sign(
+            signatureBytes = await credentials.sign(
               signData.bytes,
               chainId: selectedNetwork.chainId,
             );
-            signatureBytes = _signatureToUint8List(signature);
           }
           final signatureHex = bytesToHex(signatureBytes, include0x: true);
           await connector.approveRequest(
@@ -1478,7 +1478,10 @@ class WalletController extends ChangeNotifier {
     });
     connector.on('session_update', (update) {
       final sessionUpdate = update as WCSessionUpdateResponse;
-      walletConnectSession = sessionUpdate.status;
+      walletConnectSession = SessionStatus(
+        chainId: sessionUpdate.chainId,
+        accounts: sessionUpdate.accounts,
+      );
       notifyListeners();
     });
     connector.on('disconnect', (_) {
@@ -1696,17 +1699,6 @@ class WalletController extends ChangeNotifier {
       rawHex: hex,
       address: _parseEthereumAddress(address),
     );
-  }
-
-  Uint8List _signatureToUint8List(MsgSignature signature) {
-    final rBytes = intToBytes(signature.r, length: 32);
-    final sBytes = intToBytes(signature.s, length: 32);
-    final v = signature.v >= 27 ? signature.v : signature.v + 27;
-    return Uint8List.fromList([
-      ...rBytes,
-      ...sBytes,
-      v,
-    ]);
   }
 
   void _enqueueWalletConnectRequest(WalletConnectRequest request) {
