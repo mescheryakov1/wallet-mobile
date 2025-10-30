@@ -98,6 +98,24 @@ class WalletConnectService extends ChangeNotifier {
       return;
     }
 
+    final requiredNamespaces = event.params.requiredNamespaces;
+    debugPrint('WC Proposal namespaces: ${requiredNamespaces.keys.toList()}');
+    if (requiredNamespaces.isEmpty) {
+      await client.reject(
+        id: event.id,
+        reason: Errors.getSdkError(Errors.UNSUPPORTED_NAMESPACE_KEY),
+      );
+      return;
+    }
+
+    final selectedEntry = requiredNamespaces.entries.firstWhere(
+      (entry) => entry.key.startsWith('eip155'),
+      orElse: () => requiredNamespaces.entries.first,
+    );
+
+    final namespaceKey = selectedEntry.key;
+    final requiredNamespace = selectedEntry.value;
+
     final address = walletApi.getAddress();
     if (address == null) {
       await client.reject(
@@ -116,17 +134,8 @@ class WalletConnectService extends ChangeNotifier {
       return;
     }
 
-    final requiredNamespace = event.params.requiredNamespaces['eip155'];
-    if (requiredNamespace == null) {
-      await client.reject(
-        id: event.id,
-        reason: Errors.getSdkError(Errors.UNSUPPORTED_NAMESPACE_KEY),
-      );
-      return;
-    }
-
-    final requestedChains = requiredNamespace.chains ?? const [];
     final supportedChain = 'eip155:$chainId';
+    final requestedChains = requiredNamespace.chains ?? const [];
     if (requestedChains.isNotEmpty && !requestedChains.contains(supportedChain)) {
       await client.reject(
         id: event.id,
@@ -136,7 +145,7 @@ class WalletConnectService extends ChangeNotifier {
     }
 
     final namespaces = <String, Namespace>{
-      'eip155': Namespace(
+      namespaceKey: Namespace(
         accounts: <String>['$supportedChain:${address.hexEip55}'],
         methods: requiredNamespace.methods,
         events: requiredNamespace.events,
@@ -147,6 +156,7 @@ class WalletConnectService extends ChangeNotifier {
       id: event.id,
       namespaces: namespaces,
     );
+    debugPrint('WC Proposal approved for $namespaceKey with $supportedChain');
 
     final dappName = event.params.proposer.metadata.name;
     if (!activeSessions.contains(dappName)) {
