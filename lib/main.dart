@@ -12,6 +12,16 @@ import 'package:web3dart/crypto.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:qr_code_tools/qr_code_tools.dart';
 import 'package:walletconnect_dart/walletconnect_dart.dart';
+import 'package:uuid/uuid.dart';
+
+const PeerMeta _defaultWalletConnectPeerMeta = PeerMeta(
+  name: 'Wallet Mobile',
+  description: 'Кроссплатформенный эфир-кошелёк',
+  url: 'https://walletconnect.org',
+  icons: [
+    'https://walletconnect.org/walletconnect-logo.png',
+  ],
+);
 
 void main() {
   runApp(const WalletApp());
@@ -1299,20 +1309,22 @@ class WalletController extends ChangeNotifier {
       }
       _clearWalletConnectSession(notify: false);
 
-      final connector = WalletConnect(
+      final peerMeta = _defaultWalletConnectPeerMeta;
+      final session = WalletConnectSession.fromUri(
         uri: trimmed,
-        clientMeta: const PeerMeta(
-          name: 'Wallet Mobile',
-          description: 'Кроссплатформенный эфир-кошелёк',
-          url: 'https://walletconnect.org',
-          icons: [
-            'https://walletconnect.org/walletconnect-logo.png',
-          ],
-        ),
+        clientId: const Uuid().v4(),
+        clientMeta: peerMeta,
+      );
+
+      final connector = WalletConnect(
+        session: session,
+        clientMeta: peerMeta,
       );
 
       _walletConnect = connector;
       _registerWalletConnectListeners(connector);
+
+      connector.reconnect();
 
       return const ActionResult.success(
         'Запрос на подключение отправлен. Подтвердите соединение в dApp.',
