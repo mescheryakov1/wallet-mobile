@@ -1470,21 +1470,24 @@ class WalletController extends ChangeNotifier {
   }
 
   void _registerWalletConnectListeners(WalletConnect connector) {
-    connector.on<SessionStatus>('connect', (status) {
-      walletConnectSession = status;
+    connector.on('connect', (status) {
+      final sessionStatus = status as SessionStatus;
+      walletConnectSession = sessionStatus;
       isWalletConnectConnecting = false;
       notifyListeners();
     });
-    connector.on<WCSessionUpdateResponse>('session_update', (update) {
-      walletConnectSession = update.status;
+    connector.on('session_update', (update) {
+      final sessionUpdate = update as WCSessionUpdateResponse;
+      walletConnectSession = sessionUpdate.status;
       notifyListeners();
     });
     connector.on('disconnect', (_) {
       _clearWalletConnectSession();
     });
 
-    connector.on<WCSessionRequest>('session_request', (request) async {
-      walletConnectPeerMeta = request.peerMeta;
+    connector.on('session_request', (request) async {
+      final sessionRequest = request as WCSessionRequest;
+      walletConnectPeerMeta = sessionRequest.peerMeta;
       notifyListeners();
       final currentWallet = wallet;
       if (currentWallet == null) {
@@ -1503,17 +1506,23 @@ class WalletController extends ChangeNotifier {
       }
     });
 
-    connector.on<JsonRpcRequest>(
+    connector.on(
       'eth_sendTransaction',
-      _handleWalletConnectTransactionRequest,
+      (request) => _handleWalletConnectTransactionRequest(
+        request as JsonRpcRequest,
+      ),
     );
-    connector.on<JsonRpcRequest>(
+    connector.on(
       'personal_sign',
-      _handleWalletConnectPersonalSignRequest,
+      (request) => _handleWalletConnectPersonalSignRequest(
+        request as JsonRpcRequest,
+      ),
     );
-    connector.on<JsonRpcRequest>(
+    connector.on(
       'eth_sign',
-      _handleWalletConnectEthSignRequest,
+      (request) => _handleWalletConnectEthSignRequest(
+        request as JsonRpcRequest,
+      ),
     );
 
     const unsupportedMethods = [
@@ -1525,9 +1534,9 @@ class WalletController extends ChangeNotifier {
       'eth_signTypedData_v4',
     ];
     for (final method in unsupportedMethods) {
-      connector.on<JsonRpcRequest>(method, (request) {
+      connector.on(method, (request) {
         _rejectWalletConnectRpcRequest(
-          request,
+          request as JsonRpcRequest,
           'Метод $method пока не поддерживается.',
         );
       });
