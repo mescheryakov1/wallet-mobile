@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web3dart/web3dart.dart';
 
+import 'wallet_connect_page.dart';
 void main() {
   runApp(const WalletApp());
 }
@@ -106,6 +107,18 @@ class _WalletHomePageState extends State<WalletHomePage> {
       appBar: AppBar(
         title: const Text('Ethereum Wallet'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.link),
+            tooltip: 'WalletConnect',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const WalletConnectPage(),
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Обновить баланс',

@@ -39,6 +39,7 @@ dependencies:
   shared_preferences: ^2.2.3
   web3dart: ^2.7.3
   blockchain_utils: ^5.2.0
+  walletconnect_flutter_v2: ^2.0.0
 
 dev_dependencies:
   flutter_test:
