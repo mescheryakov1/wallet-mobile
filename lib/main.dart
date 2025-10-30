@@ -136,18 +136,7 @@ class _WalletHomePageState extends State<WalletHomePage> {
         );
         return;
       }
-      final result = await _controller.connectToWalletConnect(uri);
-      if (!mounted) {
-        return;
-      }
-      result.when(
-        success: (message) => messenger.showSnackBar(
-          SnackBar(content: Text(message)),
-        ),
-        failure: (error) => messenger.showSnackBar(
-          SnackBar(content: Text(error)),
-        ),
-      );
+      await _connectToWalletConnectUri(uri);
     } catch (error) {
       if (!mounted) {
         return;
@@ -156,6 +145,81 @@ class _WalletHomePageState extends State<WalletHomePage> {
         SnackBar(content: Text('Ошибка сканирования QR-кода: $error')),
       );
     }
+  }
+
+  Future<void> _promptWalletConnectUriInput() async {
+    final textController = TextEditingController();
+    String? uri;
+
+    try {
+      uri = await showDialog<String>(
+        context: context,
+        builder: (context) {
+          String? errorText;
+          return StatefulBuilder(
+            builder: (context, setState) {
+              return AlertDialog(
+                title: const Text('Подключение по ссылке'),
+                content: TextField(
+                  controller: textController,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: 'WalletConnect URI',
+                    hintText: 'wc:...',
+                    errorText: errorText,
+                  ),
+                  keyboardType: TextInputType.url,
+                  maxLines: 1,
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Отмена'),
+                  ),
+                  FilledButton(
+                    onPressed: () {
+                      final trimmed = textController.text.trim();
+                      if (trimmed.isEmpty) {
+                        setState(() {
+                          errorText = 'Вставьте ссылку.';
+                        });
+                        return;
+                      }
+                      Navigator.of(context).pop(trimmed);
+                    },
+                    child: const Text('Подключить'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      textController.dispose();
+    }
+
+    if (uri == null || uri.isEmpty) {
+      return;
+    }
+
+    await _connectToWalletConnectUri(uri);
+  }
+
+  Future<void> _connectToWalletConnectUri(String uri) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final result = await _controller.connectToWalletConnect(uri);
+    if (!mounted) {
+      return;
+    }
+    result.when(
+      success: (message) => messenger.showSnackBar(
+        SnackBar(content: Text(message)),
+      ),
+      failure: (error) => messenger.showSnackBar(
+        SnackBar(content: Text(error)),
+      ),
+    );
   }
 
   Future<void> _disconnectWalletConnect() async {
@@ -301,6 +365,7 @@ class _WalletHomePageState extends State<WalletHomePage> {
                 WalletConnectSection(
                   controller: _controller,
                   onScanQr: _scanWalletConnectQr,
+                  onPasteUri: _promptWalletConnectUriInput,
                   onDisconnect: _controller.isWalletConnectConnected
                       ? _disconnectWalletConnect
                       : null,
@@ -399,11 +464,13 @@ class WalletConnectSection extends StatelessWidget {
   const WalletConnectSection({
     required this.controller,
     required this.onScanQr,
+    required this.onPasteUri,
     this.onDisconnect,
   });
 
   final WalletController controller;
   final Future<void> Function() onScanQr;
+  final Future<void> Function() onPasteUri;
   final Future<void> Function()? onDisconnect;
 
   @override
@@ -487,6 +554,12 @@ class WalletConnectSection extends StatelessWidget {
                   onPressed: isConnecting ? null : () => unawaited(onScanQr()),
                   icon: const Icon(Icons.qr_code_scanner),
                   label: const Text('Сканировать QR'),
+                ),
+                FilledButton.icon(
+                  onPressed:
+                      isConnecting ? null : () => unawaited(onPasteUri()),
+                  icon: const Icon(Icons.paste),
+                  label: const Text('Вставить ссылку'),
                 ),
                 if (onDisconnect != null)
                   OutlinedButton.icon(
