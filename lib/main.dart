@@ -116,7 +116,9 @@ class _WalletHomePageState extends State<WalletHomePage> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => const WalletConnectPage(),
+                  builder: (_) => WalletConnectPage(
+                    walletController: _controller,
+                  ),
                 ),
               );
             },

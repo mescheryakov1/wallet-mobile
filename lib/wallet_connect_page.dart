@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 
+import 'main.dart' show WalletController;
 import 'wallet_connect_service.dart';
 
 class WalletConnectPage extends StatefulWidget {
-  const WalletConnectPage({super.key});
+  const WalletConnectPage({
+    required this.walletController,
+    super.key,
+  });
+
+  final WalletController walletController;
 
   @override
   State<WalletConnectPage> createState() => _WalletConnectPageState();
@@ -16,9 +22,9 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
   @override
   void initState() {
     super.initState();
-    service = WalletConnectService()
-      ..addListener(_handleServiceUpdate);
     uriController = TextEditingController();
+    service = WalletConnectService(walletApi: widget.walletController)
+      ..addListener(_handleServiceUpdate);
     service.init();
   }
 
@@ -59,9 +65,6 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
             ElevatedButton(
               onPressed: () async {
                 await service.pairUri(uriController.text);
-                if (mounted) {
-                  setState(() {});
-                }
               },
               child: const Text('Pair'),
             ),
