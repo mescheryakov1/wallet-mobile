@@ -21,12 +21,13 @@ class WalletConnectService extends ChangeNotifier {
   String _status = 'disconnected';
   String debugLastProposalLog = '';
   String debugLastError = '';
-  String debugLastRequestError = '';
   bool _handlersRegistered = false;
   String? _lastRequestDebug;
+  String? _lastErrorDebug;
 
   String get status => _status;
   String? get lastRequestDebug => _lastRequestDebug;
+  String? get lastErrorDebug => _lastErrorDebug;
 
   Future<void> init() async {
     if (_client != null) {
@@ -60,7 +61,7 @@ class WalletConnectService extends ChangeNotifier {
       _client!.onSessionDelete.subscribe(_onSessionDelete);
 
       if (!_handlersRegistered) {
-        _registerRequestHandlers();
+        _registerAccountAndHandlers();
       }
 
       _refreshActiveSessions();
@@ -114,106 +115,37 @@ class WalletConnectService extends ChangeNotifier {
     notifyListeners();
 
     final proposal = event.params;
-    final requiredNamespaces = proposal.requiredNamespaces;
-    final optionalNamespaces = proposal.optionalNamespaces;
-    final requestedNamespaces =
-        requiredNamespaces.isNotEmpty ? requiredNamespaces : (optionalNamespaces ?? {});
+    final generatedNamespaces = proposal.generatedNamespaces ?? {};
 
     debugLastProposalLog =
-        'proposal namespaceKeys=${requestedNamespaces.keys.toList()} '
-        'req=${requiredNamespaces.keys.toList()} opt=${optionalNamespaces?.keys.toList()}';
+        'proposal namespaceKeys=${generatedNamespaces.keys.toList()} '
+        'generated=${generatedNamespaces.isNotEmpty}';
     debugLastError = '';
     notifyListeners();
 
     debugPrint(
-      'WC Proposal namespaces: ${requestedNamespaces.keys.toList()} '
-      '(req=${requiredNamespaces.keys.toList()}, opt=${optionalNamespaces?.keys.toList()})',
+      'WC Proposal generated namespaces: ${generatedNamespaces.keys.toList()}',
     );
 
-    if (requestedNamespaces.isEmpty) {
-      debugLastError = 'reject: no namespaces at all';
-      await client.reject(
-        id: event.id,
-        reason: Errors.getSdkError(Errors.UNSUPPORTED_NAMESPACE_KEY),
-      );
+    if (generatedNamespaces.isEmpty) {
+      debugLastError = 'approveSession aborted: no generated namespaces';
+      _lastErrorDebug = 'approveSession missing generated namespaces';
       notifyListeners();
       return;
     }
-
-    final selectedEntry = requestedNamespaces.entries.firstWhere(
-      (entry) => entry.key.startsWith('eip155'),
-      orElse: () => requestedNamespaces.entries.first,
-    );
-
-    final namespaceKey = selectedEntry.key;
-    final requestedNamespace = selectedEntry.value;
-
-    final address = walletApi.getAddress();
-    if (address == null) {
-      debugLastError = 'reject: UNSUPPORTED_ACCOUNTS no address available';
-      await client.reject(
-        id: event.id,
-        reason: Errors.getSdkError(Errors.UNSUPPORTED_ACCOUNTS),
-      );
-      notifyListeners();
-      return;
-    }
-
-    final requestedChains = requestedNamespace.chains ?? const <String>[];
-    final requestedMethods = requestedNamespace.methods ?? const <String>[];
-    final requestedEvents = requestedNamespace.events ?? const <String>[];
-
-    final accounts = <String>[];
-    for (final chain in requestedChains) {
-      accounts.add('$chain:${address.hexEip55}');
-    }
-    if (accounts.isEmpty) {
-      final walletChainId = walletApi.getChainId();
-      if (walletChainId != null) {
-        accounts.add('eip155:$walletChainId:${address.hexEip55}');
-      }
-    }
-
-    if (accounts.isEmpty) {
-      debugLastError = 'reject: UNSUPPORTED_CHAINS no chains requested and no wallet chain';
-      await client.reject(
-        id: event.id,
-        reason: Errors.getSdkError(Errors.UNSUPPORTED_CHAINS),
-      );
-      notifyListeners();
-      return;
-    }
-
-    debugLastProposalLog =
-        'about to approve ns=$namespaceKey chains=$requestedChains '
-        'accounts=$accounts methods=$requestedMethods events=$requestedEvents';
-    debugLastError = '';
-    notifyListeners();
-
-    final namespaces = <String, Namespace>{
-      namespaceKey: Namespace(
-        accounts: accounts,
-        methods: requestedMethods,
-        events: requestedEvents,
-      ),
-    };
 
     try {
-      await client.approve(
+      await client.approveSession(
         id: event.id,
-        namespaces: namespaces,
+        namespaces: generatedNamespaces,
       );
     } catch (e, st) {
-      debugLastError = 'approve threw: $e';
-      debugPrint('approve exception: $e\n$st');
+      debugLastError = 'approveSession threw: $e';
+      _lastErrorDebug = 'approveSession failed: $e';
+      debugPrint('approveSession exception: $e\n$st');
       notifyListeners();
       return;
     }
-
-    debugPrint(
-      'WC Proposal approved for $namespaceKey with accounts=$accounts '
-      'methods=$requestedMethods events=$requestedEvents',
-    );
 
     final dappName = proposal.proposer.metadata.name ?? 'unknown dapp';
     if (!activeSessions.contains(dappName)) {
@@ -221,8 +153,9 @@ class WalletConnectService extends ChangeNotifier {
     }
     _status = 'connected';
     debugLastProposalLog =
-        'approved ns=$namespaceKey accounts=$accounts';
+        'approved namespaces=${generatedNamespaces.keys.toList()}';
     debugLastError = '';
+    _lastErrorDebug = '';
     notifyListeners();
   }
 
@@ -267,13 +200,58 @@ class WalletConnectService extends ChangeNotifier {
     super.dispose();
   }
 
-  void _registerRequestHandlers() {
+  void _registerAccountAndHandlers() {
     final client = _client;
     if (client == null) {
       return;
     }
 
     const chainId = 'eip155:11155111';
+    final walletAddress = walletApi.getAddress()?.hexEip55;
+
+    if (walletAddress == null) {
+      _lastErrorDebug = 'registerAccount skipped: no wallet address';
+      notifyListeners();
+    } else {
+      var registered = false;
+      try {
+        client.registerAccount(
+          chainId: chainId,
+          account: walletAddress,
+        );
+        registered = true;
+      } catch (_) {
+        try {
+          client.registerAccount(
+            chainId: chainId,
+            accountAddress: walletAddress,
+          );
+          registered = true;
+        } catch (error) {
+          _lastErrorDebug = 'registerAccount failed: $error';
+          notifyListeners();
+        }
+      }
+
+      if (registered) {
+        _lastErrorDebug = '';
+        notifyListeners();
+      }
+    }
+
+    try {
+      client.registerEventEmitter(
+        chainId: chainId,
+        event: 'accountsChanged',
+      );
+      client.registerEventEmitter(
+        chainId: chainId,
+        event: 'chainChanged',
+      );
+    } catch (error) {
+      _lastErrorDebug = 'registerEventEmitter failed: $error';
+      notifyListeners();
+    }
 
     client.registerRequestHandler(
       chainId: chainId,
@@ -292,7 +270,7 @@ class WalletConnectService extends ChangeNotifier {
 
   Future<void> _handlePersonalSign(String topic, dynamic params) async {
     _lastRequestDebug = 'personal_sign topic=$topic params=$params';
-    debugLastRequestError = 'reject: USER_REJECTED_SIGN';
+    _lastErrorDebug = 'reject: USER_REJECTED_SIGN';
     notifyListeners();
 
     throw Errors.getSdkError(Errors.USER_REJECTED_SIGN);
@@ -300,7 +278,7 @@ class WalletConnectService extends ChangeNotifier {
 
   Future<void> _handleEthSendTransaction(String topic, dynamic params) async {
     _lastRequestDebug = 'eth_sendTransaction topic=$topic params=$params';
-    debugLastRequestError = 'reject: USER_REJECTED_SIGN';
+    _lastErrorDebug = 'reject: USER_REJECTED_SIGN';
     notifyListeners();
 
     throw Errors.getSdkError(Errors.USER_REJECTED_SIGN);

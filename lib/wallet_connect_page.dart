@@ -91,7 +91,7 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
             Text('Last error: ${service.debugLastError}'),
             const SizedBox(height: 8),
             Text('Last request: ${service.lastRequestDebug ?? ''}'),
-            Text('Last request error: ${service.debugLastRequestError}'),
+            Text('Last error: ${service.lastErrorDebug ?? ''}'),
           ],
         ),
       ),
