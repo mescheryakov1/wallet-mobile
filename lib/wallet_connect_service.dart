@@ -105,72 +105,90 @@ class WalletConnectService extends ChangeNotifier {
     debugLastError = '';
     notifyListeners();
 
-    final requiredNamespaces = event.params.requiredNamespaces;
-    debugPrint('WC Proposal namespaces: ${requiredNamespaces.keys.toList()}');
-    if (requiredNamespaces.isEmpty) {
-      debugLastError =
-          'requiredNamespaces empty -> skip reject, waiting';
+    final proposal = event.params;
+    final requiredNamespaces = proposal.requiredNamespaces;
+    final optionalNamespaces = proposal.optionalNamespaces;
+    final requestedNamespaces =
+        requiredNamespaces.isNotEmpty ? requiredNamespaces : (optionalNamespaces ?? {});
+
+    debugLastProposalLog =
+        'proposal namespaceKeys=${requestedNamespaces.keys.toList()} '
+        'req=${requiredNamespaces.keys.toList()} opt=${optionalNamespaces?.keys.toList()}';
+    debugLastError = '';
+    notifyListeners();
+
+    debugPrint(
+      'WC Proposal namespaces: ${requestedNamespaces.keys.toList()} '
+      '(req=${requiredNamespaces.keys.toList()}, opt=${optionalNamespaces?.keys.toList()})',
+    );
+
+    if (requestedNamespaces.isEmpty) {
+      debugLastError = 'reject: no namespaces at all';
+      await client.reject(
+        id: event.id,
+        reason: Errors.getSdkError(Errors.UNSUPPORTED_NAMESPACE_KEY),
+      );
       notifyListeners();
-      // NOTE: SDK 2.0.14 даёт пустой requiredNamespaces на первом вызове.
-      // Мы не знаем где реально лежат namespaces (возможно другое поле),
-      // поэтому не рвём соединение сразу. Ждём следующее событие или будем парсить другое поле позже.
       return;
     }
 
-    debugLastProposalLog =
-        'namespaces=${requiredNamespaces.keys.toList()}';
-    notifyListeners();
-
-    final selectedEntry = requiredNamespaces.entries.firstWhere(
+    final selectedEntry = requestedNamespaces.entries.firstWhere(
       (entry) => entry.key.startsWith('eip155'),
-      orElse: () => requiredNamespaces.entries.first,
+      orElse: () => requestedNamespaces.entries.first,
     );
 
     final namespaceKey = selectedEntry.key;
-    final requiredNamespace = selectedEntry.value;
+    final requestedNamespace = selectedEntry.value;
 
     final address = walletApi.getAddress();
     if (address == null) {
       debugLastError = 'reject: UNSUPPORTED_ACCOUNTS no address available';
-      notifyListeners();
       await client.reject(
         id: event.id,
         reason: Errors.getSdkError(Errors.UNSUPPORTED_ACCOUNTS),
       );
+      notifyListeners();
       return;
     }
 
-    final requestedChains = requiredNamespace.chains ?? const [];
-    final walletChainId = walletApi.getChainId();
-    final fallbackChain = walletChainId != null ? 'eip155:$walletChainId' : null;
-    if (requestedChains.isEmpty && fallbackChain == null) {
-      debugLastError =
-          'reject: UNSUPPORTED_CHAINS requested=$requestedChains walletChainId=$walletChainId';
-      notifyListeners();
+    final requestedChains = requestedNamespace.chains ?? const <String>[];
+    final requestedMethods = requestedNamespace.methods ?? const <String>[];
+    final requestedEvents = requestedNamespace.events ?? const <String>[];
+
+    final accounts = <String>[];
+    for (final chain in requestedChains) {
+      accounts.add('$chain:${address.hexEip55}');
+    }
+    if (accounts.isEmpty) {
+      final walletChainId = walletApi.getChainId();
+      if (walletChainId != null) {
+        accounts.add('eip155:$walletChainId:${address.hexEip55}');
+      }
+    }
+
+    if (accounts.isEmpty) {
+      debugLastError = 'reject: UNSUPPORTED_CHAINS no chains requested and no wallet chain';
       await client.reject(
         id: event.id,
         reason: Errors.getSdkError(Errors.UNSUPPORTED_CHAINS),
       );
+      notifyListeners();
       return;
     }
 
-    final supportedChain = requestedChains.isNotEmpty
-        ? requestedChains.first
-        : (fallbackChain ?? 'eip155:1');
+    debugLastProposalLog =
+        'about to approve ns=$namespaceKey chains=$requestedChains '
+        'accounts=$accounts methods=$requestedMethods events=$requestedEvents';
+    debugLastError = '';
+    notifyListeners();
 
     final namespaces = <String, Namespace>{
       namespaceKey: Namespace(
-        accounts: <String>['$supportedChain:${address.hexEip55}'],
-        methods: requiredNamespace.methods,
-        events: requiredNamespace.events,
+        accounts: accounts,
+        methods: requestedMethods,
+        events: requestedEvents,
       ),
     };
-
-    debugLastProposalLog =
-        'approve namespaceKey=$namespaceKey requestedChains=$requestedChains '
-        'supportedChain=$supportedChain accounts=$supportedChain:${address.hexEip55}';
-    debugLastError = '';
-    notifyListeners();
 
     try {
       await client.approve(
@@ -183,16 +201,20 @@ class WalletConnectService extends ChangeNotifier {
       notifyListeners();
       return;
     }
+
     debugPrint(
-      'WC Proposal approved for $namespaceKey with $supportedChain; '
-      'requested=$requestedChains',
+      'WC Proposal approved for $namespaceKey with accounts=$accounts '
+      'methods=$requestedMethods events=$requestedEvents',
     );
 
-    final dappName = event.params.proposer.metadata.name;
+    final dappName = proposal.proposer.metadata.name ?? 'unknown dapp';
     if (!activeSessions.contains(dappName)) {
       activeSessions.add(dappName);
     }
     _status = 'connected';
+    debugLastProposalLog =
+        'approved ns=$namespaceKey accounts=$accounts';
+    debugLastError = '';
     notifyListeners();
   }
 
