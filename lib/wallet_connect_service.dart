@@ -475,11 +475,23 @@ class WalletConnectService extends ChangeNotifier {
   String _buildFakeResultFor(PendingWcRequest request) {
     switch (request.method) {
       case 'personal_sign':
-        return '0xSIGNED_MESSAGE_PLACEHOLDER';
+        return _fakeSignatureHex();
       case 'eth_sendTransaction':
-        return '0xTX_HASH_PLACEHOLDER';
+        return _fakeTxHashHex();
       default:
-        return 'placeholder';
+        return _fakeSignatureHex();
     }
+  }
+
+  String _fakeSignatureHex() {
+    const String chunk = '11';
+    final String body = List<String>.filled(65, chunk).join();
+    return '0x$body';
+  }
+
+  String _fakeTxHashHex() {
+    const String chunk = 'aa';
+    final String body = List<String>.filled(32, chunk).join();
+    return '0x$body';
   }
 }
