@@ -658,9 +658,31 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
   int? getChainId() => selectedNetwork.chainId;
 
   @override
-  Future<String?> signMessage(Uint8List messageBytes) {
-    // TODO: implement local message signing
-    return Future.value(null);
+  Future<String?> signMessage(Uint8List messageBytes) async {
+    final currentWallet = wallet;
+    if (currentWallet == null) {
+      return null;
+    }
+
+    final privateKey = currentWallet.privateKey;
+    if (privateKey.isEmpty) {
+      return null;
+    }
+
+    final normalizedKey =
+        privateKey.startsWith('0x') ? privateKey.substring(2) : privateKey;
+    final ethKey = EthPrivateKey.fromHex(normalizedKey);
+    final signatureBytes =
+        await ethKey.signPersonalMessageToUint8List(messageBytes);
+    return _bytesToHex(signatureBytes);
+  }
+
+  String _bytesToHex(Uint8List bytes) {
+    final buffer = StringBuffer('0x');
+    for (final byte in bytes) {
+      buffer.write(byte.toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
   }
 
   @override

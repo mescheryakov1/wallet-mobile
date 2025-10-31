@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/foundation.dart';
 import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart';
 
@@ -21,6 +23,8 @@ class WalletConnectService extends ChangeNotifier {
   String _status = 'disconnected';
   String debugLastProposalLog = '';
   String debugLastError = '';
+  String debugLastRequestLog = '';
+  String debugLastRequestError = '';
 
   String get status => _status;
 
@@ -52,6 +56,7 @@ class WalletConnectService extends ChangeNotifier {
       );
 
       _client!.onSessionProposal.subscribe(_onSessionProposal);
+      _client!.onSessionRequest.subscribe(_onSessionRequest);
       _client!.onSessionConnect.subscribe(_onSessionConnect);
       _client!.onSessionDelete.subscribe(_onSessionDelete);
 
@@ -218,6 +223,104 @@ class WalletConnectService extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> _onSessionRequest(SessionRequestEvent? event) async {
+    final client = _client;
+    if (client == null || event == null) {
+      return;
+    }
+
+    final topic = event.topic;
+    final requestId = event.id;
+    final method = event.method;
+    final rawParams = event.params;
+
+    debugLastRequestLog =
+        'req method=$method params=$rawParams topic=$topic id=$requestId';
+    debugLastRequestError = '';
+    notifyListeners();
+
+    Future<void> sendSuccess(String resultHex) async {
+      await client.respondSessionRequest(
+        topic: topic,
+        response: JsonRpcResponse<String>(
+          id: requestId,
+          result: resultHex,
+        ),
+      );
+      debugLastRequestLog =
+          'responded success $method resultLen=${resultHex.length}';
+      debugLastRequestError = '';
+      notifyListeners();
+    }
+
+    Future<void> sendError(String message) async {
+      await client.respondSessionRequest(
+        topic: topic,
+        response: JsonRpcResponse<String>(
+          id: requestId,
+          error: JsonRpcError(
+            code: 5000,
+            message: message,
+          ),
+        ),
+      );
+      debugLastRequestLog = 'responded error $method message=$message';
+      debugLastRequestError = 'error for $method: $message';
+      notifyListeners();
+    }
+
+    if (method == 'personal_sign') {
+      final paramsList = rawParams is List ? rawParams : <dynamic>[];
+      String? messageHex;
+      for (final param in paramsList) {
+        if (param is String && param.startsWith('0x')) {
+          messageHex = param;
+          break;
+        }
+      }
+
+      if (messageHex == null) {
+        await sendError('no message hex');
+        return;
+      }
+
+      Uint8List _hexToBytes(String hex) {
+        final cleaned = hex.startsWith('0x') ? hex.substring(2) : hex;
+        final length = cleaned.length;
+        final result = Uint8List(length ~/ 2);
+        for (int i = 0; i < length; i += 2) {
+          result[i ~/ 2] =
+              int.parse(cleaned.substring(i, i + 2), radix: 16);
+        }
+        return result;
+      }
+
+      Uint8List messageBytes;
+      try {
+        messageBytes = _hexToBytes(messageHex);
+      } catch (error) {
+        await sendError('invalid hex: $error');
+        return;
+      }
+
+      final signature = await walletApi.signMessage(messageBytes);
+      if (signature == null) {
+        await sendError('signMessage returned null');
+        return;
+      }
+
+      await sendSuccess(signature);
+      return;
+    }
+
+    if (method == 'eth_sendTransaction') {
+      await sendError('eth_sendTransaction not supported yet');
+      return;
+    }
+
+    await sendError('unsupported method $method');
+  }
+
   void _onSessionConnect(SessionConnect? event) {
     if (event == null) {
       return;
@@ -253,6 +356,7 @@ class WalletConnectService extends ChangeNotifier {
     final client = _client;
     if (client != null) {
       client.onSessionProposal.unsubscribe(_onSessionProposal);
+      client.onSessionRequest.unsubscribe(_onSessionRequest);
       client.onSessionConnect.unsubscribe(_onSessionConnect);
       client.onSessionDelete.unsubscribe(_onSessionDelete);
     }
