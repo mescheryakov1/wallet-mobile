@@ -100,21 +100,26 @@ class WalletConnectService extends ChangeNotifier {
       return;
     }
 
+    debugLastProposalLog =
+        'RAW event=${event.toString()} | params=${event.params.toString()}';
+    debugLastError = '';
+    notifyListeners();
+
     final requiredNamespaces = event.params.requiredNamespaces;
     debugPrint('WC Proposal namespaces: ${requiredNamespaces.keys.toList()}');
+    if (requiredNamespaces.isEmpty) {
+      debugLastError =
+          'requiredNamespaces empty -> skip reject, waiting';
+      notifyListeners();
+      // NOTE: SDK 2.0.14 даёт пустой requiredNamespaces на первом вызове.
+      // Мы не знаем где реально лежат namespaces (возможно другое поле),
+      // поэтому не рвём соединение сразу. Ждём следующее событие или будем парсить другое поле позже.
+      return;
+    }
+
     debugLastProposalLog =
         'namespaces=${requiredNamespaces.keys.toList()}';
     notifyListeners();
-    if (requiredNamespaces.isEmpty) {
-      debugLastError =
-          'reject: UNSUPPORTED_NAMESPACE_KEY namespaces empty';
-      notifyListeners();
-      await client.reject(
-        id: event.id,
-        reason: Errors.getSdkError(Errors.UNSUPPORTED_NAMESPACE_KEY),
-      );
-      return;
-    }
 
     final selectedEntry = requiredNamespaces.entries.firstWhere(
       (entry) => entry.key.startsWith('eip155'),
