@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter/foundation.dart';
 import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart';
 
@@ -23,11 +21,12 @@ class WalletConnectService extends ChangeNotifier {
   String _status = 'disconnected';
   String debugLastProposalLog = '';
   String debugLastError = '';
-  String debugLastRequestLog = '';
   String debugLastRequestError = '';
   bool _handlersRegistered = false;
+  String? _lastRequestDebug;
 
   String get status => _status;
+  String? get lastRequestDebug => _lastRequestDebug;
 
   Future<void> init() async {
     if (_client != null) {
@@ -279,67 +278,31 @@ class WalletConnectService extends ChangeNotifier {
     client.registerRequestHandler(
       chainId: chainId,
       method: 'personal_sign',
-      handler: (String topic, dynamic params) async {
-        debugLastRequestLog =
-            'personal_sign request topic=$topic params=$params';
-        debugLastRequestError = '';
-        notifyListeners();
-
-        String? messageHex;
-        if (params is List) {
-          for (final element in params) {
-            if (element is String && element.startsWith('0x')) {
-              messageHex = element;
-              break;
-            }
-          }
-        }
-
-        if (messageHex == null) {
-          debugLastRequestError = 'personal_sign no hex message';
-          notifyListeners();
-          throw Errors.getSdkError(Errors.USER_REJECTED_SIGN);
-        }
-
-        Uint8List hexToBytes(String hex) {
-          final cleaned = hex.startsWith('0x') ? hex.substring(2) : hex;
-          final length = cleaned.length;
-          final result = Uint8List(length ~/ 2);
-          for (int i = 0; i < length; i += 2) {
-            result[i ~/ 2] =
-                int.parse(cleaned.substring(i, i + 2), radix: 16);
-          }
-          return result;
-        }
-
-        final messageBytes = hexToBytes(messageHex);
-        final signature = await walletApi.signMessage(messageBytes);
-        if (signature == null) {
-          debugLastRequestError = 'personal_sign signMessage returned null';
-          notifyListeners();
-          throw Errors.getSdkError(Errors.USER_REJECTED_SIGN);
-        }
-
-        debugLastRequestLog =
-            'personal_sign success sigLen=${signature.length}';
-        debugLastRequestError = '';
-        notifyListeners();
-        return signature;
-      },
+      handler: _handlePersonalSign,
     );
 
     client.registerRequestHandler(
       chainId: chainId,
       method: 'eth_sendTransaction',
-      handler: (String topic, dynamic params) async {
-        debugLastRequestLog =
-            'eth_sendTransaction request topic=$topic params=$params';
-        debugLastRequestError = 'eth_sendTransaction not supported';
-        notifyListeners();
-        throw Errors.getSdkError(Errors.USER_REJECTED_SIGN);
-      },
+      handler: _handleEthSendTransaction,
     );
 
     _handlersRegistered = true;
+  }
+
+  Future<void> _handlePersonalSign(String topic, dynamic params) async {
+    _lastRequestDebug = 'personal_sign topic=$topic params=$params';
+    debugLastRequestError = 'reject: USER_REJECTED_SIGN';
+    notifyListeners();
+
+    throw Errors.getSdkError(Errors.USER_REJECTED_SIGN);
+  }
+
+  Future<void> _handleEthSendTransaction(String topic, dynamic params) async {
+    _lastRequestDebug = 'eth_sendTransaction topic=$topic params=$params';
+    debugLastRequestError = 'reject: USER_REJECTED_SIGN';
+    notifyListeners();
+
+    throw Errors.getSdkError(Errors.USER_REJECTED_SIGN);
   }
 }
