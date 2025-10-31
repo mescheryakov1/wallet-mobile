@@ -6,6 +6,20 @@ import 'local_wallet_api.dart';
 const String _defaultWalletConnectProjectId =
     'ac79370327e3526ba018428bc44831f1';
 
+class PendingWcRequest {
+  PendingWcRequest({
+    required this.topic,
+    required this.requestId,
+    required this.method,
+    required this.params,
+  });
+
+  final String topic;
+  final int requestId;
+  final String method;
+  final dynamic params;
+}
+
 class WalletConnectService extends ChangeNotifier {
   WalletConnectService({
     required this.walletApi,
@@ -24,10 +38,12 @@ class WalletConnectService extends ChangeNotifier {
   bool _handlersRegistered = false;
   String? _lastRequestDebug;
   String? _lastErrorDebug;
+  PendingWcRequest? _pendingRequest;
 
   String get status => _status;
   String? get lastRequestDebug => _lastRequestDebug;
   String? get lastErrorDebug => _lastErrorDebug;
+  PendingWcRequest? get pendingRequest => _pendingRequest;
 
   Future<void> init() async {
     if (_client != null) {
@@ -71,6 +87,11 @@ class WalletConnectService extends ChangeNotifier {
       debugPrint('WalletConnect init failed: $error\n$stackTrace');
     }
 
+    notifyListeners();
+  }
+
+  void _setPendingRequest(PendingWcRequest? req) {
+    _pendingRequest = req;
     notifyListeners();
   }
 
@@ -233,7 +254,7 @@ class WalletConnectService extends ChangeNotifier {
   void _onSessionDelete(SessionDelete? event) {
     activeSessions.clear();
     _status = 'ready';
-    notifyListeners();
+    _setPendingRequest(null);
   }
 
   void _refreshActiveSessions() {
@@ -319,18 +340,149 @@ class WalletConnectService extends ChangeNotifier {
   }
 
   Future<void> _handlePersonalSign(String topic, dynamic params) async {
+    final client = _client;
     _lastRequestDebug = 'personal_sign topic=$topic params=$params';
-    _lastErrorDebug = 'reject: USER_REJECTED_SIGN';
+    _lastErrorDebug = '';
     notifyListeners();
 
-    throw Errors.getSdkError(Errors.USER_REJECTED_SIGN);
+    if (client == null) {
+      _lastErrorDebug = 'handler error: client not ready';
+      notifyListeners();
+      return;
+    }
+
+    SessionRequest? matchedRequest;
+    try {
+      final pending = client.pendingRequests.getAll();
+      for (final request in pending.reversed) {
+        if (request.topic == topic && request.method == 'personal_sign') {
+          matchedRequest = request;
+          break;
+        }
+      }
+    } catch (error) {
+      _lastErrorDebug = 'pending request lookup failed: $error';
+      notifyListeners();
+    }
+
+    if (matchedRequest == null) {
+      _lastErrorDebug = 'pending request not found, using fallback id';
+      notifyListeners();
+    }
+
+    final requestId = matchedRequest?.id ?? DateTime.now().millisecondsSinceEpoch;
+    final requestParams = matchedRequest?.params ?? params;
+
+    _setPendingRequest(
+      PendingWcRequest(
+        topic: topic,
+        requestId: requestId,
+        method: 'personal_sign',
+        params: requestParams,
+      ),
+    );
   }
 
   Future<void> _handleEthSendTransaction(String topic, dynamic params) async {
+    final client = _client;
     _lastRequestDebug = 'eth_sendTransaction topic=$topic params=$params';
-    _lastErrorDebug = 'reject: USER_REJECTED_SIGN';
+    _lastErrorDebug = '';
     notifyListeners();
 
-    throw Errors.getSdkError(Errors.USER_REJECTED_SIGN);
+    if (client == null) {
+      _lastErrorDebug = 'handler error: client not ready';
+      notifyListeners();
+      return;
+    }
+
+    SessionRequest? matchedRequest;
+    try {
+      final pending = client.pendingRequests.getAll();
+      for (final request in pending.reversed) {
+        if (request.topic == topic && request.method == 'eth_sendTransaction') {
+          matchedRequest = request;
+          break;
+        }
+      }
+    } catch (error) {
+      _lastErrorDebug = 'pending request lookup failed: $error';
+      notifyListeners();
+    }
+
+    if (matchedRequest == null) {
+      _lastErrorDebug = 'pending request not found, using fallback id';
+      notifyListeners();
+    }
+
+    final requestId = matchedRequest?.id ?? DateTime.now().millisecondsSinceEpoch;
+    final requestParams = matchedRequest?.params ?? params;
+
+    _setPendingRequest(
+      PendingWcRequest(
+        topic: topic,
+        requestId: requestId,
+        method: 'eth_sendTransaction',
+        params: requestParams,
+      ),
+    );
+  }
+
+  Future<void> rejectPendingRequest() async {
+    final client = _client;
+    final request = _pendingRequest;
+    if (client == null || request == null) {
+      return;
+    }
+
+    try {
+      await client.respondSessionRequest(
+        topic: request.topic,
+        response: JsonRpcResponse<dynamic>(
+          id: request.requestId,
+          error: const JsonRpcError(
+            code: 5001,
+            message: 'User rejected method',
+          ),
+        ),
+      );
+      _lastRequestDebug =
+          'reject sent for ${request.method} id=${request.requestId}';
+      _lastErrorDebug = '';
+    } catch (error, stackTrace) {
+      _lastErrorDebug = 'reject error: $error';
+      debugPrint('WalletConnect reject failed: $error\n$stackTrace');
+    } finally {
+      _setPendingRequest(null);
+    }
+  }
+
+  Future<void> approvePendingRequest() async {
+    final client = _client;
+    final request = _pendingRequest;
+    if (client == null || request == null) {
+      return;
+    }
+
+    // TODO: Implement actual approval logic (sign message / send transaction).
+    try {
+      await client.respondSessionRequest(
+        topic: request.topic,
+        response: JsonRpcResponse<dynamic>(
+          id: request.requestId,
+          error: const JsonRpcError(
+            code: 5001,
+            message: 'User rejected method',
+          ),
+        ),
+      );
+      _lastRequestDebug =
+          'approve placeholder sent reject for ${request.method}';
+      _lastErrorDebug = '';
+    } catch (error, stackTrace) {
+      _lastErrorDebug = 'approve error: $error';
+      debugPrint('WalletConnect approve failed: $error\n$stackTrace');
+    } finally {
+      _setPendingRequest(null);
+    }
   }
 }

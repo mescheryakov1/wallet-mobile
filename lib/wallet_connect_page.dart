@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'main.dart' show WalletController;
 import 'wallet_connect_service.dart';
+import 'wc_request_approval_page.dart';
 
 class WalletConnectPage extends StatefulWidget {
   const WalletConnectPage({
@@ -82,6 +83,26 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
                 },
               ),
             ),
+            const SizedBox(height: 16),
+            Text(
+              'Pending request: ${service.pendingRequest?.method ?? 'none'}',
+            ),
+            if (service.pendingRequest != null) ...[
+              const SizedBox(height: 8),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => WcRequestApprovalPage(
+                        service: service,
+                      ),
+                    ),
+                  );
+                },
+                child: const Text('Review request'),
+              ),
+            ],
             const SizedBox(height: 24),
             const Text(
               'Debug info:',
@@ -91,7 +112,7 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
             Text('Last error: ${service.debugLastError}'),
             const SizedBox(height: 8),
             Text('Last request: ${service.lastRequestDebug ?? ''}'),
-            Text('Last error: ${service.lastErrorDebug ?? ''}'),
+            Text('Last request error: ${service.lastErrorDebug ?? ''}'),
           ],
         ),
       ),
