@@ -128,6 +128,15 @@ class _RequestValidationResult {
   final bool chainAllowed;
 }
 
+class _NamespaceConfig {
+  _NamespaceConfig({required this.isRequired});
+
+  bool isRequired;
+  final Set<String> chains = <String>{};
+  final Set<String> methods = <String>{};
+  final Set<String> events = <String>{};
+}
+
 class WalletConnectRequestException implements Exception {
   WalletConnectRequestException(this.message);
 
@@ -584,185 +593,203 @@ class WalletConnectService extends ChangeNotifier {
       notifyListeners();
       await client.reject(
         id: event.id,
-        reason: WalletConnectError(
-          code: 5100,
-          message: 'Chain not approved for this session.',
-        ),
+        reason: Errors.getSdkError(Errors.USER_REJECTED_CHAINS),
       );
       return;
     }
 
     final addressHex = address.hexEip55;
     final requiredNamespaces = proposal.requiredNamespaces;
-    final optionalNamespaces = proposal.optionalNamespaces ?? <String, RequiredNamespace>{};
-    final bool hasRequired = requiredNamespaces.isNotEmpty;
-    final entries = hasRequired
-        ? requiredNamespaces.entries.toList(growable: false)
-        : optionalNamespaces.entries.toList(growable: false);
-    final bool noNamespacesProvided = requiredNamespaces.isEmpty && optionalNamespaces.isEmpty;
-
-    final namespaces = <String, Namespace>{};
+    final optionalNamespaces =
+        proposal.optionalNamespaces ?? <String, RequiredNamespace>{};
 
     Future<void> rejectProposal({
-      required int code,
-      required String message,
+      required WalletConnectError reason,
       required String debugMessage,
     }) async {
       debugLastError = debugMessage;
       _lastErrorDebug = debugMessage;
       notifyListeners();
-      await client.reject(
-        id: event.id,
-        reason: WalletConnectError(code: code, message: message),
-      );
+      await client.reject(id: event.id, reason: reason);
     }
 
-    if (entries.isNotEmpty) {
-      for (final entry in entries) {
-        final namespaceKey = entry.key;
-        final normalizedKey = namespaceKey.toLowerCase();
-        if (!normalizedKey.startsWith('eip155')) {
-          await rejectProposal(
+    if (requiredNamespaces.isEmpty && optionalNamespaces.isEmpty) {
+      await rejectProposal(
+        reason: Errors.getSdkError(Errors.USER_REJECTED_CHAINS),
+        debugMessage: 'reject proposal: no namespaces provided',
+      );
+      return;
+    }
+
+    final Map<String, _NamespaceConfig> aggregated =
+        <String, _NamespaceConfig>{};
+
+    void mergeNamespace(
+      String namespaceKey,
+      RequiredNamespace namespace, {
+      required bool isRequired,
+    }) {
+      final normalizedKey = namespaceKey.toLowerCase();
+      if (!normalizedKey.startsWith('eip155')) {
+        if (isRequired) {
+          throw WalletConnectError(
             code: 5100,
             message: 'Namespace not supported for this session.',
-            debugMessage: 'reject proposal: unsupported namespace $namespaceKey',
           );
-          return;
         }
-
-        final requestedNamespace = entry.value;
-        final requestedChains = (requestedNamespace.chains ?? const <String>[]) 
-            .map(_normalizeChainId)
-            .whereType<String>()
-            .toList(growable: false);
-        final allowedChains = requestedChains.isEmpty
-            ? List<String>.from(_supportedChains)
-            : requestedChains
-                .where((chain) => _supportedChainSet.contains(chain))
-                .toList(growable: false);
-
-        if (requestedChains.isNotEmpty &&
-            allowedChains.length != requestedChains.length) {
-          await rejectProposal(
-            code: 5100,
-            message: 'Chain not approved for this session.',
-            debugMessage:
-                'reject proposal: unsupported chains requested=$requestedChains',
-          );
-          return;
-        }
-
-        if (allowedChains.isEmpty) {
-          if (hasRequired) {
-            await rejectProposal(
-              code: 5100,
-              message: 'Chain not approved for this session.',
-              debugMessage: 'reject proposal: no allowed chains',
-            );
-            return;
-          }
-          continue;
-        }
-
-        final requestedMethods = (requestedNamespace.methods ?? const <String>[])
-            .map((method) => method.toLowerCase())
-            .toList(growable: false);
-        final allowedMethods = requestedMethods.isEmpty
-            ? List<String>.from(_supportedMethods)
-            : requestedMethods
-                .where((method) => _supportedMethodSet.contains(method))
-                .toList(growable: false);
-
-        if (requestedMethods.isNotEmpty &&
-            allowedMethods.length != requestedMethods.length) {
-          await rejectProposal(
-            code: 5101,
-            message: 'Method not approved for this session.',
-            debugMessage:
-                'reject proposal: unsupported methods requested=$requestedMethods',
-          );
-          return;
-        }
-
-        if (allowedMethods.isEmpty) {
-          if (hasRequired) {
-            await rejectProposal(
-              code: 5101,
-              message: 'Method not approved for this session.',
-              debugMessage: 'reject proposal: no allowed methods',
-            );
-            return;
-          }
-          continue;
-        }
-
-        final requestedEvents = (requestedNamespace.events ?? const <String>[])
-            .map((eventName) => eventName.toLowerCase())
-            .toList(growable: false);
-        final allowedEvents = requestedEvents.isEmpty
-            ? List<String>.from(_supportedEvents)
-            : requestedEvents
-                .where((eventName) => _supportedEventSet.contains(eventName))
-                .toList(growable: false);
-
-        if (requestedEvents.isNotEmpty && allowedEvents.isEmpty) {
-          if (hasRequired) {
-            await rejectProposal(
-              code: 5101,
-              message: 'Events not approved for this session.',
-              debugMessage:
-                  'reject proposal: unsupported events requested=$requestedEvents',
-            );
-            return;
-          }
-          continue;
-        }
-
-        final accounts = allowedChains
-            .map((chain) => '$chain:$addressHex')
-            .toSet()
-            .toList(growable: false);
-
-        if (accounts.isEmpty) {
-          if (hasRequired) {
-            await rejectProposal(
-              code: 5100,
-              message: 'Chain not approved for this session.',
-              debugMessage: 'reject proposal: no accounts generated',
-            );
-            return;
-          }
-          continue;
-        }
-
-        namespaces[namespaceKey] = Namespace(
-          accounts: accounts,
-          methods: allowedMethods,
-          events: allowedEvents.isEmpty
-              ? List<String>.from(_supportedEvents)
-              : allowedEvents,
-        );
+        return;
       }
+
+      final config = aggregated.putIfAbsent(
+        normalizedKey,
+        () => _NamespaceConfig(isRequired: isRequired),
+      );
+      if (isRequired) {
+        config.isRequired = true;
+      }
+
+      final chains = namespace.chains ?? const <String>[];
+      for (final chain in chains) {
+        final normalized = _normalizeChainId(chain);
+        if (normalized != null) {
+          config.chains.add(normalized);
+        }
+      }
+
+      final methods = namespace.methods ?? const <String>[];
+      for (final method in methods) {
+        config.methods.add(method.toLowerCase());
+      }
+
+      final events = namespace.events ?? const <String>[];
+      for (final eventName in events) {
+        config.events.add(eventName.toLowerCase());
+      }
+    }
+
+    try {
+      requiredNamespaces.forEach(
+        (key, value) => mergeNamespace(key, value, isRequired: true),
+      );
+      optionalNamespaces.forEach(
+        (key, value) => mergeNamespace(key, value, isRequired: false),
+      );
+    } on WalletConnectError catch (error) {
+      await rejectProposal(
+        reason: error,
+        debugMessage: 'reject proposal: ${error.message}',
+      );
+      return;
+    }
+
+    if (aggregated.isEmpty) {
+      await rejectProposal(
+        reason: Errors.getSdkError(Errors.USER_REJECTED_CHAINS),
+        debugMessage: 'reject proposal: no supported namespaces after merge',
+      );
+      return;
+    }
+
+    final namespaces = <String, Namespace>{};
+    final List<String> approvedDetails = <String>[];
+
+    for (final entry in aggregated.entries) {
+      final namespaceKey = entry.key;
+      final config = entry.value;
+
+      final filteredChains = config.chains
+          .where(_supportedChainSet.contains)
+          .toList(growable: false);
+
+      if (filteredChains.isEmpty) {
+        if (config.isRequired) {
+          await rejectProposal(
+            reason: Errors.getSdkError(Errors.USER_REJECTED_CHAINS),
+            debugMessage:
+                'reject proposal: no supported chains for $namespaceKey',
+          );
+          return;
+        }
+        continue;
+      }
+
+      final List<String> allowedMethods;
+      if (config.methods.isEmpty) {
+        allowedMethods = List<String>.from(_supportedMethods);
+      } else {
+        allowedMethods = _supportedMethods
+            .where((method) => config.methods.contains(method.toLowerCase()))
+            .toList(growable: false);
+        if (allowedMethods.isEmpty) {
+          if (config.isRequired) {
+            await rejectProposal(
+              reason: WalletConnectError(
+                code: 5101,
+                message: 'Method not approved for this session.',
+              ),
+              debugMessage:
+                  'reject proposal: unsupported methods requested=${config.methods.toList()}',
+            );
+            return;
+          }
+          continue;
+        }
+      }
+
+      final List<String> allowedEvents;
+      if (config.events.isEmpty) {
+        allowedEvents = List<String>.from(_supportedEvents);
+      } else {
+        allowedEvents = _supportedEvents
+            .where((eventName) => config.events.contains(eventName.toLowerCase()))
+            .toList(growable: false);
+        if (allowedEvents.isEmpty) {
+          if (config.isRequired) {
+            await rejectProposal(
+              reason: WalletConnectError(
+                code: 5101,
+                message: 'Events not approved for this session.',
+              ),
+              debugMessage:
+                  'reject proposal: unsupported events requested=${config.events.toList()}',
+            );
+            return;
+          }
+          continue;
+        }
+      }
+
+      final accounts = filteredChains
+          .map((chain) => '$chain:$addressHex')
+          .toSet()
+          .toList(growable: false);
+
+      if (accounts.isEmpty) {
+        if (config.isRequired) {
+          await rejectProposal(
+            reason: Errors.getSdkError(Errors.USER_REJECTED_CHAINS),
+            debugMessage: 'reject proposal: failed to build accounts',
+          );
+          return;
+        }
+        continue;
+      }
+
+      namespaces[namespaceKey] = Namespace(
+        accounts: accounts,
+        methods: allowedMethods,
+        events: allowedEvents,
+      );
+
+      approvedDetails.add('$namespaceKey:${filteredChains.join(',')}');
     }
 
     if (namespaces.isEmpty) {
-      if (noNamespacesProvided) {
-        final accounts = _supportedChains
-            .map((chain) => '$chain:$addressHex')
-            .toList(growable: false);
-        namespaces['eip155'] = Namespace(
-          accounts: accounts,
-          methods: List<String>.from(_supportedMethods),
-          events: List<String>.from(_supportedEvents),
-        );
-      } else {
-        await rejectProposal(
-          code: 5100,
-          message: 'Chain not approved for this session.',
-          debugMessage: 'reject proposal: no supported namespaces after filtering',
-        );
-        return;
-      }
+      await rejectProposal(
+        reason: Errors.getSdkError(Errors.USER_REJECTED_CHAINS),
+        debugMessage: 'reject proposal: no namespaces after filtering',
+      );
+      return;
     }
 
     try {
@@ -770,19 +797,17 @@ class WalletConnectService extends ChangeNotifier {
         id: event.id,
         namespaces: namespaces,
       );
-    } catch (e, st) {
-      debugLastError = 'approve threw: $e';
-      _lastErrorDebug = 'approve failed: $e';
-      debugPrint('approve exception: $e\n$st');
+    } catch (error, stackTrace) {
+      debugLastError = 'approve threw: $error';
+      _lastErrorDebug = 'approve failed: $error';
+      debugPrint('approve exception: $error\n$stackTrace');
       notifyListeners();
       return;
     }
 
     _status = 'connected';
-    final approvedSummary = namespaces.entries
-        .map((entry) => '${entry.key}:${entry.value.accounts.join('|')}')
-        .toList();
-    debugLastProposalLog = 'approved namespaces=$approvedSummary';
+    debugLastProposalLog =
+        'approved namespaces=${approvedDetails.join(' | ')} accounts=${namespaces.values.map((ns) => ns.accounts).toList()}';
     debugLastError = '';
     _lastErrorDebug = '';
     notifyListeners();
