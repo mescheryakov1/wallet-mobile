@@ -60,6 +60,10 @@ class WalletConnectService extends ChangeNotifier {
   PendingWcRequest? get pendingRequest => _pendingRequest;
 
   Future<void> init() async {
+    await initWalletConnect();
+  }
+
+  Future<void> initWalletConnect() async {
     if (_client != null) {
       return;
     }
@@ -81,14 +85,17 @@ class WalletConnectService extends ChangeNotifier {
         icons: const ['https://example.com/icon.png'],
       );
 
-      _client = await SignClient.createInstance(
+      final client = await SignClient.createInstance(
         projectId: projectId,
         metadata: metadata,
       );
 
-      _client!.onSessionProposal.subscribe(_onSessionProposal);
-      _client!.onSessionConnect.subscribe(_onSessionConnect);
-      _client!.onSessionDelete.subscribe(_onSessionDelete);
+      _client = client;
+
+      client.onSessionProposal.subscribe(_onSessionProposal);
+      client.onSessionRequest.subscribe(_onSessionRequest);
+      client.onSessionConnect.subscribe(_onSessionConnect);
+      client.onSessionDelete.subscribe(_onSessionDelete);
 
       if (!_handlersRegistered) {
         _registerAccountAndHandlers();
@@ -333,6 +340,7 @@ class WalletConnectService extends ChangeNotifier {
     final client = _client;
     if (client != null) {
       client.onSessionProposal.unsubscribe(_onSessionProposal);
+      client.onSessionRequest.unsubscribe(_onSessionRequest);
       client.onSessionConnect.unsubscribe(_onSessionConnect);
       client.onSessionDelete.unsubscribe(_onSessionDelete);
     }
@@ -391,6 +399,15 @@ class WalletConnectService extends ChangeNotifier {
     );
 
     _handlersRegistered = true;
+  }
+
+  void _onSessionRequest(SessionRequestEvent? event) {
+    if (event == null) {
+      return;
+    }
+    debugPrint(
+      'WC session_request topic=${event.topic} method=${event.params.request.method}',
+    );
   }
 
   Future<String> _handlePersonalSign(String topic, dynamic params) async {
