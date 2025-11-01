@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import 'wallet_connect_manager.dart';
 import 'wallet_connect_models.dart';
-import 'wc_request_approval_page.dart';
 
 class WalletConnectRequestListener extends StatefulWidget {
   const WalletConnectRequestListener({
@@ -23,7 +22,7 @@ class _WalletConnectRequestListenerState
     extends State<WalletConnectRequestListener> {
   final WalletConnectManager _manager = WalletConnectManager.instance;
   OverlayEntry? _bannerEntry;
-  bool _dialogOpen = false;
+  bool _isProcessingAction = false;
 
   @override
   void initState() {
@@ -46,40 +45,13 @@ class _WalletConnectRequestListenerState
     final WalletConnectRequestLogEntry? pending =
         _manager.firstPendingLog;
     if (pending == null) {
-      if (!_dialogOpen) {
-        _hideBanner();
-      }
+      _hideBanner();
+      _isProcessingAction = false;
       return;
     }
 
-    if (_dialogOpen) {
-      return;
-    }
-
+    _isProcessingAction = false;
     _showBanner(pending);
-  }
-
-  Future<void> _openDialog(WalletConnectRequestLogEntry entry) async {
-    if (_dialogOpen) {
-      return;
-    }
-    _dialogOpen = true;
-    _hideBanner();
-    await Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute<bool>(
-        builder: (_) => WcRequestApprovalPage(
-          requestId: entry.request.requestId,
-          manager: _manager,
-        ),
-        fullscreenDialog: true,
-      ),
-    );
-    if (!mounted) {
-      return;
-    }
-    _dialogOpen = false;
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _handleQueueUpdate());
   }
 
   void _showBanner(WalletConnectRequestLogEntry entry) {
@@ -92,8 +64,10 @@ class _WalletConnectRequestListenerState
       builder: (BuildContext context) {
         return _WalletConnectRequestBanner(
           entry: entry,
-          onReview: () => _openDialog(entry),
+          isProcessing: _isProcessingAction,
+          onApprove: () => _approveRequest(entry),
           onReject: () => _rejectRequest(entry),
+          onClose: () => _dismissRequest(entry),
         );
       },
     );
@@ -105,7 +79,40 @@ class _WalletConnectRequestListenerState
     _bannerEntry = null;
   }
 
+  Future<void> _approveRequest(WalletConnectRequestLogEntry entry) async {
+    if (_isProcessingAction) {
+      return;
+    }
+    setState(() {
+      _isProcessingAction = true;
+    });
+    _bannerEntry?.markNeedsBuild();
+    try {
+      await _manager.approveRequest(entry.request.requestId);
+      _hideBanner();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Failed to approve request: $error')),
+      );
+      setState(() {
+        _isProcessingAction = false;
+      });
+      _bannerEntry?.markNeedsBuild();
+    }
+  }
+
   Future<void> _rejectRequest(WalletConnectRequestLogEntry entry) async {
+    if (_isProcessingAction) {
+      return;
+    }
+    setState(() {
+      _isProcessingAction = true;
+    });
+    _bannerEntry?.markNeedsBuild();
     try {
       await _manager.rejectRequest(entry.request.requestId);
     } catch (error) {
@@ -116,11 +123,24 @@ class _WalletConnectRequestListenerState
       messenger?.showSnackBar(
         SnackBar(content: Text('Failed to reject request: $error')),
       );
+      setState(() {
+        _isProcessingAction = false;
+      });
+      _bannerEntry?.markNeedsBuild();
+      return;
     } finally {
       if (mounted) {
         _hideBanner();
       }
     }
+  }
+
+  void _dismissRequest(WalletConnectRequestLogEntry entry) {
+    setState(() {
+      _isProcessingAction = false;
+    });
+    _manager.dismissRequest(entry.request.requestId);
+    _hideBanner();
   }
 
   @override
@@ -132,13 +152,17 @@ class _WalletConnectRequestListenerState
 class _WalletConnectRequestBanner extends StatelessWidget {
   const _WalletConnectRequestBanner({
     required this.entry,
-    required this.onReview,
+    required this.isProcessing,
+    required this.onApprove,
     required this.onReject,
+    required this.onClose,
   });
 
   final WalletConnectRequestLogEntry entry;
-  final Future<void> Function() onReview;
+  final bool isProcessing;
+  final Future<void> Function() onApprove;
   final Future<void> Function() onReject;
+  final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
@@ -146,6 +170,7 @@ class _WalletConnectRequestBanner extends StatelessWidget {
     final method = entry.request.method;
     final chainLabel = entry.request.chainId ?? 'unknown chain';
     final subtitle = '$method • $chainLabel';
+    final List<Widget> details = _buildDetails(theme);
 
     return SafeArea(
       child: Align(
@@ -164,29 +189,60 @@ class _WalletConnectRequestBanner extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'WalletConnect request',
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'WalletConnect request',
+                                style: theme.textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(subtitle, style: theme.textTheme.bodyMedium),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: isProcessing ? null : onClose,
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 6),
-                    Text(subtitle, style: theme.textTheme.bodyMedium),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
+                    ...details,
+                    if (details.isNotEmpty) const SizedBox(height: 12),
+                    if (isProcessing)
+                      const Align(
+                        alignment: Alignment.center,
+                        child: Padding(
+                          padding: EdgeInsets.only(bottom: 8),
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
                         TextButton(
-                          onPressed: () {
-                            unawaited(onReject());
-                          },
+                          onPressed: isProcessing
+                              ? null
+                              : () {
+                                  unawaited(onReject());
+                                },
                           child: const Text('Reject'),
                         ),
                         const SizedBox(width: 8),
                         ElevatedButton(
-                          onPressed: () {
-                            unawaited(onReview());
-                          },
-                          child: const Text('Review'),
+                          onPressed: isProcessing
+                              ? null
+                              : () {
+                                  unawaited(onApprove());
+                                },
+                          child: const Text('Approve'),
                         ),
                       ],
                     ),
@@ -198,5 +254,105 @@ class _WalletConnectRequestBanner extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  List<Widget> _buildDetails(ThemeData theme) {
+    switch (entry.request.method) {
+      case 'personal_sign':
+        return _buildPersonalSignDetails(theme);
+      case 'eth_sendTransaction':
+        return _buildTransactionDetails(theme);
+      default:
+        return <Widget>[
+          Text(
+            'Params: ${entry.request.params}',
+            style: theme.textTheme.bodySmall,
+          ),
+        ];
+    }
+  }
+
+  List<Widget> _buildPersonalSignDetails(ThemeData theme) {
+    final List<dynamic> params = _asList(entry.request.params);
+    final String? address = params.length >= 2 ? params[1] as String? : null;
+    final String? messageHex = _resolveMessage(params);
+    final String? decoded =
+        messageHex != null ? _decodeHexToUtf8(messageHex) : null;
+    final String messageDisplay =
+        decoded?.trim().isNotEmpty == true ? decoded! : (messageHex ?? '<unknown>');
+    return <Widget>[
+      Text('From: ${address ?? 'unknown'}', style: theme.textTheme.bodySmall),
+      const SizedBox(height: 4),
+      Text('Message: $messageDisplay', style: theme.textTheme.bodySmall),
+    ];
+  }
+
+  List<Widget> _buildTransactionDetails(ThemeData theme) {
+    final Map<String, dynamic> tx = _asTx(entry.request.params);
+    final String from = tx['from']?.toString() ?? 'unknown';
+    final String to = tx['to']?.toString() ?? 'unknown';
+    final String value = tx['value']?.toString() ?? '0x0';
+    final String gas = tx['gas']?.toString() ?? tx['gasLimit']?.toString() ?? '-';
+    final String gasPrice =
+        tx['gasPrice']?.toString() ?? tx['maxFeePerGas']?.toString() ?? '-';
+    final String nonce = tx['nonce']?.toString() ?? '-';
+    return <Widget>[
+      Text('From: $from', style: theme.textTheme.bodySmall),
+      const SizedBox(height: 4),
+      Text('To: $to', style: theme.textTheme.bodySmall),
+      const SizedBox(height: 4),
+      Text('Value: $value', style: theme.textTheme.bodySmall),
+      const SizedBox(height: 4),
+      Text('Gas: $gas', style: theme.textTheme.bodySmall),
+      const SizedBox(height: 4),
+      Text('Gas price: $gasPrice', style: theme.textTheme.bodySmall),
+      const SizedBox(height: 4),
+      Text('Nonce: $nonce', style: theme.textTheme.bodySmall),
+    ];
+  }
+
+  List<dynamic> _asList(dynamic params) {
+    if (params is List) {
+      return params;
+    }
+    return <dynamic>[];
+  }
+
+  Map<String, dynamic> _asTx(dynamic params) {
+    final List<dynamic> list = _asList(params);
+    if (list.isEmpty) {
+      return <String, dynamic>{};
+    }
+    final dynamic first = list.first;
+    if (first is Map<String, dynamic>) {
+      return first;
+    }
+    if (first is Map) {
+      return Map<String, dynamic>.from(first as Map);
+    }
+    return <String, dynamic>{};
+  }
+
+  String? _resolveMessage(List<dynamic> params) {
+    for (final dynamic value in params) {
+      if (value is String && value.startsWith('0x')) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  String? _decodeHexToUtf8(String hex) {
+    try {
+      final String cleaned = hex.startsWith('0x') ? hex.substring(2) : hex;
+      final List<int> bytes = <int>[];
+      for (int i = 0; i < cleaned.length; i += 2) {
+        final int byte = int.parse(cleaned.substring(i, i + 2), radix: 16);
+        bytes.add(byte);
+      }
+      return String.fromCharCodes(bytes);
+    } catch (_) {
+      return null;
+    }
   }
 }

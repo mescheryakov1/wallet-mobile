@@ -135,16 +135,42 @@ class _WalletHomePageState extends State<WalletHomePage> {
               );
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.history),
-            tooltip: 'WalletConnect activity',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const WalletConnectActivityScreen(),
-                ),
+          AnimatedBuilder(
+            animation: WalletConnectManager.instance,
+            builder: (BuildContext context, Widget? child) {
+              final bool hasPending =
+                  WalletConnectManager.instance.hasPendingRequests;
+              return Stack(
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  child!,
+                  if (hasPending)
+                    Positioned(
+                      right: 6,
+                      top: 6,
+                      child: Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                ],
               );
             },
+            child: IconButton(
+              icon: const Icon(Icons.history),
+              tooltip: 'WalletConnect activity',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const WalletConnectActivityScreen(),
+                  ),
+                );
+              },
+            ),
           ),
           IconButton(
             icon: const Icon(Icons.refresh),

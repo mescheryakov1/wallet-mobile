@@ -221,6 +221,7 @@ class WalletConnectRequestLogEntry {
     required this.status,
     this.result,
     this.error,
+    this.isDismissed = false,
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 
@@ -229,6 +230,24 @@ class WalletConnectRequestLogEntry {
   final String? result;
   final String? error;
   final DateTime timestamp;
+  final bool isDismissed;
+
+  WalletConnectRequestLogEntry copyWith({
+    WalletConnectRequestStatus? status,
+    String? result,
+    String? error,
+    DateTime? timestamp,
+    bool? isDismissed,
+  }) {
+    return WalletConnectRequestLogEntry(
+      request: request,
+      status: status ?? this.status,
+      result: result ?? this.result,
+      error: error ?? this.error,
+      timestamp: timestamp ?? this.timestamp,
+      isDismissed: isDismissed ?? this.isDismissed,
+    );
+  }
 }
 
 class WalletConnectRequestQueue extends ChangeNotifier {
@@ -240,11 +259,21 @@ class WalletConnectRequestQueue extends ChangeNotifier {
 
   WalletConnectRequestLogEntry? getFirstPending() {
     for (final WalletConnectRequestLogEntry entry in _entries) {
-      if (entry.status == WalletConnectRequestStatus.pending) {
+      if (entry.status == WalletConnectRequestStatus.pending &&
+          !entry.isDismissed) {
         return entry;
       }
     }
     return null;
+  }
+
+  bool hasPending() {
+    for (final WalletConnectRequestLogEntry entry in _entries) {
+      if (entry.status == WalletConnectRequestStatus.pending) {
+        return true;
+      }
+    }
+    return false;
   }
 
   WalletConnectRequestLogEntry? findById(int id) {
@@ -263,8 +292,22 @@ class WalletConnectRequestQueue extends ChangeNotifier {
       _entries.add(entry);
     } else {
       final int index = _entries.indexOf(existing);
-      _entries[index] = entry;
+      final bool preserveDismissed = existing.isDismissed &&
+          entry.status == WalletConnectRequestStatus.pending;
+      _entries[index] = entry.copyWith(
+        isDismissed: preserveDismissed,
+      );
     }
+    notifyListeners();
+  }
+
+  void dismiss(int requestId) {
+    final WalletConnectRequestLogEntry? existing = findById(requestId);
+    if (existing == null || existing.status != WalletConnectRequestStatus.pending) {
+      return;
+    }
+    final int index = _entries.indexOf(existing);
+    _entries[index] = existing.copyWith(isDismissed: true);
     notifyListeners();
   }
 

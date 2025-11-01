@@ -55,6 +55,8 @@ class WalletConnectManager extends ChangeNotifier {
 
   List<WalletConnectRequestLogEntry> get activityLog => requestQueue.entries;
 
+  bool get hasPendingRequests => requestQueue.hasPending();
+
   Future<void> approveRequest(int requestId) async {
     final WalletConnectPendingRequest? pending = service.pendingRequest;
     if (pending == null || pending.requestId != requestId) {
@@ -71,18 +73,26 @@ class WalletConnectManager extends ChangeNotifier {
     await service.rejectPendingRequest();
   }
 
+  void dismissRequest(int requestId) {
+    requestQueue.dismiss(requestId);
+    notifyListeners();
+  }
+
   void _handleServiceUpdate() {
     notifyListeners();
   }
 
   void _handleRequestEvent(WalletConnectRequestEvent event) {
     _lastRequestEvent = event;
+    final WalletConnectRequestLogEntry? existing =
+        requestQueue.findById(event.request.requestId);
     final WalletConnectRequestLogEntry entry = WalletConnectRequestLogEntry(
       request: event.request,
       status: event.status,
       result: event.result,
       error: event.error,
       timestamp: event.timestamp,
+      isDismissed: existing?.isDismissed ?? false,
     );
     requestQueue.addOrUpdate(entry);
     notifyListeners();
