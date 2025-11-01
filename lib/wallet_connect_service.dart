@@ -12,6 +12,28 @@ const String _defaultWalletConnectProjectId =
     'ac79370327e3526ba018428bc44831f1';
 const String _sessionsStorageKey = 'wc_sessions';
 
+const List<String> _supportedChains = <String>[
+  'eip155:1',
+  'eip155:11155111',
+];
+
+const List<String> _supportedMethods = <String>[
+  'personal_sign',
+  'eth_sendTransaction',
+];
+
+const List<String> _supportedEvents = <String>[
+  'accountsChanged',
+  'chainChanged',
+];
+
+final Set<String> _supportedChainSet =
+    _supportedChains.map((chain) => chain.toLowerCase()).toSet();
+final Set<String> _supportedMethodSet =
+    _supportedMethods.map((method) => method.toLowerCase()).toSet();
+final Set<String> _supportedEventSet =
+    _supportedEvents.map((event) => event.toLowerCase()).toSet();
+
 class WalletSessionInfo {
   WalletSessionInfo({
     required this.topic,
@@ -299,13 +321,13 @@ class WalletConnectService extends ChangeNotifier {
 
     if (!result.methodAllowed) {
       throw WalletConnectError(
-        code: 4200,
+        code: 5101,
         message: 'Method not approved for this session.',
       );
     }
 
     throw WalletConnectError(
-      code: 4200,
+      code: 5101,
       message: 'Method not approved for this session.',
     );
   }
@@ -341,28 +363,34 @@ class WalletConnectService extends ChangeNotifier {
     String? normalizedChain,
   ) {
     final normalizedMethod = method.toLowerCase();
-    bool methodAllowed = false;
-    bool chainAllowed = normalizedChain == null;
+    final bool methodSupported = _supportedMethodSet.contains(normalizedMethod);
+    final bool chainSupported =
+        normalizedChain == null || _supportedChainSet.contains(normalizedChain);
+
+    bool methodPresent = false;
+    bool chainPresent = normalizedChain == null;
     bool allowed = false;
 
     session.namespaces.forEach((_, namespace) {
       if (allowed) {
         return;
       }
-      final namespaceMethods =
-          namespace.methods.map((value) => value.toLowerCase()).toSet();
+      final namespaceMethods = namespace.methods
+          .map((value) => value.toLowerCase())
+          .where(_supportedMethodSet.contains)
+          .toSet();
       final namespaceChains = _extractChainsFromNamespace(namespace)
           .map(_normalizeChainId)
           .whereType<String>()
+          .where(_supportedChainSet.contains)
           .toSet();
 
       if (namespaceMethods.contains(normalizedMethod)) {
-        methodAllowed = true;
+        methodPresent = true;
       }
 
-      if (!chainAllowed && normalizedChain != null &&
-          namespaceChains.contains(normalizedChain)) {
-        chainAllowed = true;
+      if (normalizedChain != null && namespaceChains.contains(normalizedChain)) {
+        chainPresent = true;
       }
 
       final chainMatches = normalizedChain == null ||
@@ -372,8 +400,13 @@ class WalletConnectService extends ChangeNotifier {
       }
     });
 
+    final bool methodAllowed = methodSupported && methodPresent;
+    final bool chainAllowed = chainSupported && chainPresent;
+    final bool finalAllowed = methodAllowed &&
+        (normalizedChain == null || chainAllowed);
+
     return _RequestValidationResult(
-      allowed: allowed,
+      allowed: finalAllowed,
       methodAllowed: methodAllowed,
       chainAllowed: chainAllowed,
     );
@@ -544,87 +577,192 @@ class WalletConnectService extends ChangeNotifier {
     notifyListeners();
 
     final proposal = event.params;
-    final generatedNamespaces = proposal.generatedNamespaces ?? {};
+    final address = walletApi.getAddress();
+    if (address == null) {
+      debugLastError = 'reject: no address available';
+      _lastErrorDebug = 'reject: no wallet address for proposal';
+      notifyListeners();
+      await client.reject(
+        id: event.id,
+        reason: WalletConnectError(
+          code: 5100,
+          message: 'Chain not approved for this session.',
+        ),
+      );
+      return;
+    }
 
-    debugLastProposalLog =
-        'proposal namespaceKeys=${generatedNamespaces.keys.toList()} '
-        'generated=${generatedNamespaces.isNotEmpty}';
-    debugLastError = '';
-    notifyListeners();
+    final addressHex = address.hexEip55;
+    final requiredNamespaces = proposal.requiredNamespaces;
+    final optionalNamespaces = proposal.optionalNamespaces ?? <String, RequiredNamespace>{};
+    final bool hasRequired = requiredNamespaces.isNotEmpty;
+    final entries = hasRequired
+        ? requiredNamespaces.entries.toList(growable: false)
+        : optionalNamespaces.entries.toList(growable: false);
+    final bool noNamespacesProvided = requiredNamespaces.isEmpty && optionalNamespaces.isEmpty;
 
-    debugPrint(
-      'WC Proposal generated namespaces: ${generatedNamespaces.keys.toList()}',
-    );
+    final namespaces = <String, Namespace>{};
 
-    Map<String, Namespace> namespaces;
-    if (generatedNamespaces.isNotEmpty) {
-      namespaces = generatedNamespaces;
-    } else {
-      final requestedNamespaces = proposal.requiredNamespaces.isNotEmpty
-          ? proposal.requiredNamespaces
-          : (proposal.optionalNamespaces ?? {});
+    Future<void> rejectProposal({
+      required int code,
+      required String message,
+      required String debugMessage,
+    }) async {
+      debugLastError = debugMessage;
+      _lastErrorDebug = debugMessage;
+      notifyListeners();
+      await client.reject(
+        id: event.id,
+        reason: WalletConnectError(code: code, message: message),
+      );
+    }
 
-      final address = walletApi.getAddress();
-      if (address == null) {
-        debugLastError = 'reject: no address available';
-        _lastErrorDebug = 'reject: UNSUPPORTED_ACCOUNTS';
-        notifyListeners();
-        await client.reject(
-          id: event.id,
-          reason: Errors.getSdkError(Errors.UNSUPPORTED_ACCOUNTS),
+    if (entries.isNotEmpty) {
+      for (final entry in entries) {
+        final namespaceKey = entry.key;
+        final normalizedKey = namespaceKey.toLowerCase();
+        if (!normalizedKey.startsWith('eip155')) {
+          await rejectProposal(
+            code: 5100,
+            message: 'Namespace not supported for this session.',
+            debugMessage: 'reject proposal: unsupported namespace $namespaceKey',
+          );
+          return;
+        }
+
+        final requestedNamespace = entry.value;
+        final requestedChains = (requestedNamespace.chains ?? const <String>[]) 
+            .map(_normalizeChainId)
+            .whereType<String>()
+            .toList(growable: false);
+        final allowedChains = requestedChains.isEmpty
+            ? List<String>.from(_supportedChains)
+            : requestedChains
+                .where((chain) => _supportedChainSet.contains(chain))
+                .toList(growable: false);
+
+        if (requestedChains.isNotEmpty &&
+            allowedChains.length != requestedChains.length) {
+          await rejectProposal(
+            code: 5100,
+            message: 'Chain not approved for this session.',
+            debugMessage:
+                'reject proposal: unsupported chains requested=$requestedChains',
+          );
+          return;
+        }
+
+        if (allowedChains.isEmpty) {
+          if (hasRequired) {
+            await rejectProposal(
+              code: 5100,
+              message: 'Chain not approved for this session.',
+              debugMessage: 'reject proposal: no allowed chains',
+            );
+            return;
+          }
+          continue;
+        }
+
+        final requestedMethods = (requestedNamespace.methods ?? const <String>[])
+            .map((method) => method.toLowerCase())
+            .toList(growable: false);
+        final allowedMethods = requestedMethods.isEmpty
+            ? List<String>.from(_supportedMethods)
+            : requestedMethods
+                .where((method) => _supportedMethodSet.contains(method))
+                .toList(growable: false);
+
+        if (requestedMethods.isNotEmpty &&
+            allowedMethods.length != requestedMethods.length) {
+          await rejectProposal(
+            code: 5101,
+            message: 'Method not approved for this session.',
+            debugMessage:
+                'reject proposal: unsupported methods requested=$requestedMethods',
+          );
+          return;
+        }
+
+        if (allowedMethods.isEmpty) {
+          if (hasRequired) {
+            await rejectProposal(
+              code: 5101,
+              message: 'Method not approved for this session.',
+              debugMessage: 'reject proposal: no allowed methods',
+            );
+            return;
+          }
+          continue;
+        }
+
+        final requestedEvents = (requestedNamespace.events ?? const <String>[])
+            .map((eventName) => eventName.toLowerCase())
+            .toList(growable: false);
+        final allowedEvents = requestedEvents.isEmpty
+            ? List<String>.from(_supportedEvents)
+            : requestedEvents
+                .where((eventName) => _supportedEventSet.contains(eventName))
+                .toList(growable: false);
+
+        if (requestedEvents.isNotEmpty && allowedEvents.isEmpty) {
+          if (hasRequired) {
+            await rejectProposal(
+              code: 5101,
+              message: 'Events not approved for this session.',
+              debugMessage:
+                  'reject proposal: unsupported events requested=$requestedEvents',
+            );
+            return;
+          }
+          continue;
+        }
+
+        final accounts = allowedChains
+            .map((chain) => '$chain:$addressHex')
+            .toSet()
+            .toList(growable: false);
+
+        if (accounts.isEmpty) {
+          if (hasRequired) {
+            await rejectProposal(
+              code: 5100,
+              message: 'Chain not approved for this session.',
+              debugMessage: 'reject proposal: no accounts generated',
+            );
+            return;
+          }
+          continue;
+        }
+
+        namespaces[namespaceKey] = Namespace(
+          accounts: accounts,
+          methods: allowedMethods,
+          events: allowedEvents.isEmpty
+              ? List<String>.from(_supportedEvents)
+              : allowedEvents,
+        );
+      }
+    }
+
+    if (namespaces.isEmpty) {
+      if (noNamespacesProvided) {
+        final accounts = _supportedChains
+            .map((chain) => '$chain:$addressHex')
+            .toList(growable: false);
+        namespaces['eip155'] = Namespace(
+          accounts: accounts,
+          methods: List<String>.from(_supportedMethods),
+          events: List<String>.from(_supportedEvents),
+        );
+      } else {
+        await rejectProposal(
+          code: 5100,
+          message: 'Chain not approved for this session.',
+          debugMessage: 'reject proposal: no supported namespaces after filtering',
         );
         return;
       }
-
-      String namespaceKey = 'eip155';
-      List<String> chains = <String>[];
-      List<String> methods = <String>[];
-      List<String> eventsList = <String>[];
-
-      if (requestedNamespaces.isNotEmpty) {
-        final selectedEntry = requestedNamespaces.entries.firstWhere(
-          (entry) => entry.key.startsWith('eip155'),
-          orElse: () => requestedNamespaces.entries.first,
-        );
-        namespaceKey = selectedEntry.key;
-        final requiredNamespace = selectedEntry.value;
-        chains = List<String>.from(requiredNamespace.chains ?? const []);
-        methods = List<String>.from(requiredNamespace.methods ?? const []);
-        eventsList =
-            List<String>.from(requiredNamespace.events ?? const []);
-      }
-
-      if (chains.isEmpty) {
-        final walletChainId = walletApi.getChainId();
-        final fallbackChainId = walletChainId != null
-            ? 'eip155:$walletChainId'
-            : 'eip155:1';
-        chains = <String>[fallbackChainId];
-      }
-
-      if (methods.isEmpty) {
-        methods = const ['personal_sign', 'eth_sendTransaction'];
-      }
-
-      if (eventsList.isEmpty) {
-        eventsList = const ['accountsChanged', 'chainChanged'];
-      }
-
-      final accounts = chains
-          .map((chain) => '$chain:${address.hexEip55}')
-          .toList(growable: false);
-
-      namespaces = <String, Namespace>{
-        namespaceKey: Namespace(
-          accounts: accounts,
-          methods: methods,
-          events: eventsList,
-        ),
-      };
-
-      debugLastProposalLog =
-          'manual namespaces for $namespaceKey chains=$chains accounts=$accounts';
-      notifyListeners();
     }
 
     try {
@@ -641,8 +779,10 @@ class WalletConnectService extends ChangeNotifier {
     }
 
     _status = 'connected';
-    debugLastProposalLog =
-        'approved namespaces=${namespaces.keys.toList()}';
+    final approvedSummary = namespaces.entries
+        .map((entry) => '${entry.key}:${entry.value.accounts.join('|')}')
+        .toList();
+    debugLastProposalLog = 'approved namespaces=$approvedSummary';
     debugLastError = '';
     _lastErrorDebug = '';
     notifyListeners();
@@ -731,50 +871,59 @@ class WalletConnectService extends ChangeNotifier {
       return;
     }
 
-    const chainId = 'eip155:11155111';
     final walletAddress = walletApi.getAddress()?.hexEip55;
 
     if (walletAddress == null) {
       _lastErrorDebug = 'registerAccount skipped: no wallet address';
       notifyListeners();
-    } else {
+      return;
+    }
+
+    final errors = <String>[];
+
+    for (final chainId in _supportedChains) {
       try {
         client.registerAccount(
           chainId: chainId,
           accountAddress: walletAddress,
         );
-        _lastErrorDebug = '';
       } catch (error) {
-        _lastErrorDebug = 'registerAccount failed: $error';
+        errors.add('registerAccount($chainId) failed: $error');
       }
-      notifyListeners();
+
+      for (final eventName in _supportedEvents) {
+        try {
+          client.registerEventEmitter(
+            chainId: chainId,
+            event: eventName,
+          );
+        } catch (error) {
+          errors.add('registerEventEmitter($chainId/$eventName) failed: $error');
+        }
+      }
+
+      for (final methodName in _supportedMethods) {
+        try {
+          final handler = methodName == 'personal_sign'
+              ? _handlePersonalSign
+              : _handleEthSendTransaction;
+          client.registerRequestHandler(
+            chainId: chainId,
+            method: methodName,
+            handler: handler,
+          );
+        } catch (error) {
+          errors.add('registerRequestHandler($chainId/$methodName) failed: $error');
+        }
+      }
     }
 
-    try {
-      client.registerEventEmitter(
-        chainId: chainId,
-        event: 'accountsChanged',
-      );
-      client.registerEventEmitter(
-        chainId: chainId,
-        event: 'chainChanged',
-      );
-    } catch (error) {
-      _lastErrorDebug = 'registerEventEmitter failed: $error';
-      notifyListeners();
+    if (errors.isNotEmpty) {
+      _lastErrorDebug = errors.join(' | ');
+    } else {
+      _lastErrorDebug = '';
     }
-
-    client.registerRequestHandler(
-      chainId: chainId,
-      method: 'personal_sign',
-      handler: _handlePersonalSign,
-    );
-
-    client.registerRequestHandler(
-      chainId: chainId,
-      method: 'eth_sendTransaction',
-      handler: _handleEthSendTransaction,
-    );
+    notifyListeners();
 
     _handlersRegistered = true;
   }
