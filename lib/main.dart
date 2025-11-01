@@ -14,7 +14,8 @@ import 'network_config.dart';
 import 'wallet_connect_activity_screen.dart';
 import 'wallet_connect_manager.dart';
 import 'wallet_connect_page.dart';
-import 'wallet_connect_request_listener.dart';
+import 'wallet_connect_models.dart';
+import 'wallet_connect_request_popup.dart';
 void main() {
   runApp(const WalletApp());
 }
@@ -31,11 +32,6 @@ class WalletApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
-      builder: (BuildContext context, Widget? child) {
-        return WalletConnectRequestListener(
-          child: child ?? const SizedBox.shrink(),
-        );
-      },
       home: const WalletHomePage(),
     );
   }
@@ -117,7 +113,6 @@ class _WalletHomePageState extends State<WalletHomePage> {
   @override
   Widget build(BuildContext context) {
     final wallet = _controller.wallet;
-    final balance = _controller.formattedBalance;
 
     return Scaffold(
       appBar: AppBar(
@@ -192,65 +187,131 @@ class _WalletHomePageState extends State<WalletHomePage> {
           ),
         ],
       ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: ListView(
+      body: AnimatedBuilder(
+        animation: Listenable.merge(
+          <Listenable>[
+            WalletConnectManager.instance,
+            WalletConnectManager.instance.requestQueue,
+          ],
+        ),
+        builder: (BuildContext context, Widget? _) {
+          final WalletConnectRequestLogEntry? pendingEntry =
+              WalletConnectManager.instance.firstPendingLog;
+
+          return Stack(
             children: [
-              _NetworkSelector(
-                networks: NetworkConfiguration.supportedNetworks,
-                selected: _controller.selectedNetwork,
-                onChanged: (network) async {
-                  try {
-                    await _controller.updateNetwork(network);
-                  } catch (error) {
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Не удалось переключить сеть: $error'),
+              _buildMainContent(context),
+              if (pendingEntry != null)
+                WalletConnectRequestPopup(
+                  entry: pendingEntry,
+                  onApprove: () =>
+                      _handleRequestApproval(pendingEntry.request.requestId),
+                  onReject: () =>
+                      _handleRequestRejection(pendingEntry.request.requestId),
+                  onDismiss: () =>
+                      WalletConnectManager.instance.dismissRequest(
+                    pendingEntry.request.requestId,
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildMainContent(BuildContext context) {
+    final wallet = _controller.wallet;
+    final balance = _controller.formattedBalance;
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: ListView(
+          children: [
+            _NetworkSelector(
+              networks: NetworkConfiguration.supportedNetworks,
+              selected: _controller.selectedNetwork,
+              onChanged: (network) async {
+                try {
+                  await _controller.updateNetwork(network);
+                } catch (error) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Не удалось переключить сеть: $error'),
+                    ),
+                  );
+                }
+              },
+            ),
+            const SizedBox(height: 16),
+            if (_controller.isInitializing)
+              const Center(child: CircularProgressIndicator())
+            else if (wallet == null)
+              _EmptyWallet(
+                onCreate: _controller.createWallet,
+                isCreating: _controller.isCreatingWallet,
+                onImport: _controller.importWallet,
+                isImporting: _controller.isImportingWallet,
+              )
+            else ...[
+              WalletInfoCard(
+                wallet: wallet,
+                balance: balance,
+                isLoadingBalance: _controller.isRefreshingBalance,
+                onDelete: _controller.deleteWallet,
+                onViewTransactions: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => TransactionHistoryPage(
+                        address: wallet.address,
+                        network: _controller.selectedNetwork,
                       ),
-                    );
-                  }
+                    ),
+                  );
                 },
               ),
-              const SizedBox(height: 16),
-              if (_controller.isInitializing)
-                const Center(child: CircularProgressIndicator())
-              else if (wallet == null)
-                _EmptyWallet(
-                  onCreate: _controller.createWallet,
-                  isCreating: _controller.isCreatingWallet,
-                  onImport: _controller.importWallet,
-                  isImporting: _controller.isImportingWallet,
-                )
-              else ...[
-                WalletInfoCard(
-                  wallet: wallet,
-                  balance: balance,
-                  isLoadingBalance: _controller.isRefreshingBalance,
-                  onDelete: _controller.deleteWallet,
-                  onViewTransactions: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => TransactionHistoryPage(
-                          address: wallet.address,
-                          network: _controller.selectedNetwork,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(height: 24),
-                _TransactionForm(
-                  controller: this,
-                  isSending: _controller.isSending,
-                ),
-              ],
+              const SizedBox(height: 24),
+              _TransactionForm(
+                controller: this,
+                isSending: _controller.isSending,
+              ),
             ],
-          ),
+          ],
         ),
       ),
     );
+  }
+
+  Future<void> _handleRequestApproval(int requestId) async {
+    try {
+      await WalletConnectManager.instance.approveRequest(requestId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Request approved')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to approve request: $error')),
+      );
+    }
+  }
+
+  Future<void> _handleRequestRejection(int requestId) async {
+    try {
+      await WalletConnectManager.instance.rejectRequest(requestId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Request rejected')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to reject request: $error')),
+      );
+    }
   }
 }
 
