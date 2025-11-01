@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web3dart/web3dart.dart';
 
 import 'local_wallet_api.dart';
+import 'network_config.dart';
 import 'wallet_connect_page.dart';
 void main() {
   runApp(const WalletApp());
@@ -696,13 +697,45 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
 
   @override
   Future<String?> sendTransaction(Map<String, dynamic> transaction) async {
+    final network = findNetworkByNumeric(selectedNetwork.chainId);
+    if (network != null) {
+      return sendTransactionOnNetwork(transaction, network);
+    }
+
+    return _sendTransactionInternal(
+      transaction,
+      rpcUrl: selectedNetwork.rpcUrl,
+      chainId: selectedNetwork.chainId,
+    );
+  }
+
+  @override
+  Future<String?> sendTransactionOnNetwork(
+    Map<String, dynamic> transaction,
+    NetworkConfig network,
+  ) {
+    return _sendTransactionInternal(
+      transaction,
+      rpcUrl: network.rpcUrl,
+      chainId: network.chainIdNumeric,
+    );
+  }
+
+  Future<String?> _sendTransactionInternal(
+    Map<String, dynamic> transaction, {
+    required String rpcUrl,
+    required int chainId,
+  }) async {
     final currentWallet = wallet;
     if (currentWallet == null) {
       return null;
     }
 
-    return _withClient((client) async {
-      final credentials = EthPrivateKey.fromHex(currentWallet.privateKey);
+    return _withClientForRpc(rpcUrl, (client) async {
+      final privateKey = currentWallet.privateKey;
+      final normalizedKey =
+          privateKey.startsWith('0x') ? privateKey.substring(2) : privateKey;
+      final credentials = EthPrivateKey.fromHex(normalizedKey);
       final toValue = transaction['to'];
       EthereumAddress? to;
       if (toValue is String && toValue.isNotEmpty) {
@@ -744,7 +777,7 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
       final txHash = await client.sendTransaction(
         credentials,
         tx,
-        chainId: selectedNetwork.chainId,
+        chainId: chainId,
       );
       return txHash;
     });
@@ -1096,8 +1129,15 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
     }
   }
 
-  Future<T> _withClient<T>(Future<T> Function(Web3Client client) action) async {
-    final client = Web3Client(selectedNetwork.rpcUrl, http.Client());
+  Future<T> _withClient<T>(Future<T> Function(Web3Client client) action) {
+    return _withClientForRpc(selectedNetwork.rpcUrl, action);
+  }
+
+  Future<T> _withClientForRpc<T>(
+    String rpcUrl,
+    Future<T> Function(Web3Client client) action,
+  ) async {
+    final client = Web3Client(rpcUrl, http.Client());
     try {
       return await action(client);
     } finally {

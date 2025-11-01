@@ -7,15 +7,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart';
 
 import 'local_wallet_api.dart';
+import 'network_config.dart';
 
 const String _defaultWalletConnectProjectId =
     'ac79370327e3526ba018428bc44831f1';
 const String _sessionsStorageKey = 'wc_sessions';
-
-const List<String> _supportedChains = <String>[
-  'eip155:1',
-  'eip155:11155111',
-];
 
 const List<String> _supportedMethods = <String>[
   'personal_sign',
@@ -27,6 +23,7 @@ const List<String> _supportedEvents = <String>[
   'chainChanged',
 ];
 
+final List<String> _supportedChains = walletConnectSupportedChainIds();
 final Set<String> _supportedChainSet =
     _supportedChains.map((chain) => chain.toLowerCase()).toSet();
 final Set<String> _supportedMethodSet =
@@ -258,6 +255,9 @@ class WalletConnectService extends ChangeNotifier {
     final requestParams = matchedRequest?.params ?? params;
     final extractedChain = matchedRequest?.chainId ??
         _deriveChainIdFromParams(method, requestParams);
+    final inferredChain = extractedChain ??
+        _inferChainIdFromSession(topic, method, requestParams);
+    final normalizedChain = _normalizeChainId(inferredChain);
 
     if (matchedRequest == null &&
         (_lastErrorDebug == null || _lastErrorDebug!.isEmpty)) {
@@ -267,7 +267,7 @@ class WalletConnectService extends ChangeNotifier {
     return _RequestExtraction(
       requestId: requestId,
       params: requestParams,
-      chainId: _normalizeChainId(extractedChain),
+      chainId: normalizedChain,
     );
   }
 
@@ -466,6 +466,65 @@ class WalletConnectService extends ChangeNotifier {
         if (chainValue is int) {
           return _normalizeChainId(chainValue.toString());
         }
+      }
+    }
+    return null;
+  }
+
+  String? _inferChainIdFromSession(
+    String topic,
+    String method,
+    dynamic params,
+  ) {
+    final session = _getSessionByTopic(topic);
+    if (session == null) {
+      return null;
+    }
+
+    final direct = _deriveChainIdFromParams(method, params);
+    if (direct != null) {
+      return _normalizeChainId(direct);
+    }
+
+    final fromAddress =
+        method == 'eth_sendTransaction' ? _extractFromAddress(params) : null;
+    final normalizedFrom =
+        fromAddress != null ? _normalizeAddress(fromAddress) : null;
+
+    String? fallback;
+    for (final namespace in session.namespaces.values) {
+      for (final account in namespace.accounts) {
+        final parts = account.split(':');
+        if (parts.length < 3) {
+          continue;
+        }
+        final normalizedChain =
+            _normalizeChainId('${parts[0]}:${parts[1]}');
+        if (normalizedChain == null) {
+          continue;
+        }
+        fallback ??= normalizedChain;
+        if (normalizedFrom != null &&
+            _normalizeAddress(parts[2]) == normalizedFrom) {
+          return normalizedChain;
+        }
+      }
+    }
+
+    return fallback;
+  }
+
+  String? _extractFromAddress(dynamic params) {
+    final list = _asList(params);
+    if (list.isEmpty) {
+      return null;
+    }
+    final first = list.first;
+    if (first is Map) {
+      final tx = Map<String, dynamic>.from(first as Map);
+      final fromValue = tx['from'];
+      if (fromValue is String && fromValue.isNotEmpty) {
+        return fromValue;
       }
     }
     return null;
@@ -984,7 +1043,9 @@ class WalletConnectService extends ChangeNotifier {
       throw error;
     }
 
-    _lastRequestDebug = 'personal_sign topic=$topic params=${extraction.params}';
+    final chainLabel = extraction.chainId ?? 'unknown';
+    _lastRequestDebug =
+        'personal_sign chain=$chainLabel topic=$topic params=${extraction.params}';
     _lastErrorDebug = '';
     _pendingRequest = PendingWcRequest(
       topic: topic,
@@ -1029,8 +1090,9 @@ class WalletConnectService extends ChangeNotifier {
       throw error;
     }
 
+    final chainLabel = extraction.chainId ?? 'unknown';
     _lastRequestDebug =
-        'eth_sendTransaction topic=$topic params=${extraction.params}';
+        'eth_sendTransaction chain=$chainLabel topic=$topic params=${extraction.params}';
     _lastErrorDebug = '';
     _pendingRequest = PendingWcRequest(
       topic: topic,
@@ -1213,15 +1275,38 @@ class WalletConnectService extends ChangeNotifier {
 
     final txParams = Map<String, dynamic>.from(params.first as Map);
     final fromValue = txParams['from'];
-    if (fromValue is String && !_sameAddress(fromValue, walletAddress.hexEip55)) {
+    if (fromValue is String &&
+        !_sameAddress(fromValue, walletAddress.hexEip55)) {
       throw WalletConnectRequestException('Transaction from does not match wallet');
     }
 
-    final hash = await walletApi.sendTransaction(txParams);
-    if (hash == null || hash.isEmpty) {
-      throw WalletConnectRequestException('Failed to send transaction');
+    final chainId = request.chainId ??
+        _inferChainIdFromSession(request.topic, request.method, request.params);
+    final normalizedChain = _normalizeChainId(chainId);
+    if (normalizedChain == null) {
+      throw WalletConnectRequestException('Unable to determine chain for request');
     }
-    return hash;
+
+    final network = findNetworkByCaip2(normalizedChain);
+    if (network == null) {
+      throw WalletConnectRequestException('Unsupported chain $normalizedChain');
+    }
+
+    txParams['chainId'] ??=
+        '0x${network.chainIdNumeric.toRadixString(16)}';
+
+    try {
+      final hash = await walletApi.sendTransactionOnNetwork(txParams, network);
+      if (hash == null || hash.isEmpty) {
+        throw WalletConnectRequestException('Failed to send transaction');
+      }
+      return hash;
+    } catch (error) {
+      if (error is WalletConnectRequestException) {
+        rethrow;
+      }
+      throw WalletConnectRequestException('$error');
+    }
   }
 
   List<dynamic> _asList(dynamic value) {
