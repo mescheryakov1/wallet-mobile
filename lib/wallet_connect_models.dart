@@ -137,7 +137,7 @@ class WalletSessionInfo {
 /// Lightweight record of the most recent WalletConnect action.
 @immutable
 class WalletConnectActivityEntry {
-  const WalletConnectActivityEntry({
+  WalletConnectActivityEntry({
     this.requestId,
     required this.method,
     required this.summary,
@@ -199,7 +199,7 @@ class WalletConnectPendingRequest {
 
 @immutable
 class WalletConnectRequestEvent {
-  const WalletConnectRequestEvent({
+  WalletConnectRequestEvent({
     required this.request,
     required this.status,
     this.result,
@@ -216,7 +216,7 @@ class WalletConnectRequestEvent {
 
 @immutable
 class WalletConnectRequestLogEntry {
-  const WalletConnectRequestLogEntry({
+  WalletConnectRequestLogEntry({
     required this.request,
     required this.status,
     this.result,
