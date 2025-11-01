@@ -3,12 +3,68 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart';
 
 import 'local_wallet_api.dart';
 
 const String _defaultWalletConnectProjectId =
     'ac79370327e3526ba018428bc44831f1';
+const String _sessionsStorageKey = 'wc_sessions';
+
+class WalletSessionInfo {
+  WalletSessionInfo({
+    required this.topic,
+    required this.dappName,
+    required this.chains,
+    required this.accounts,
+    this.dappUrl,
+    this.iconUrl,
+    this.expiry,
+    this.approvedAt,
+  });
+
+  factory WalletSessionInfo.fromJson(Map<String, dynamic> json) {
+    return WalletSessionInfo(
+      topic: json['topic'] as String? ?? '',
+      dappName: json['dappName'] as String? ?? '',
+      dappUrl: json['dappUrl'] as String?,
+      iconUrl: json['iconUrl'] as String?,
+      chains: (json['chains'] as List?)
+              ?.whereType<String>()
+              .toList(growable: false) ??
+          const <String>[],
+      accounts: (json['accounts'] as List?)
+              ?.whereType<String>()
+              .toList(growable: false) ??
+          const <String>[],
+      expiry: json['expiry'] as int?,
+      approvedAt: json['approvedAt'] as int?,
+    );
+  }
+
+  final String topic;
+  final String dappName;
+  final List<String> chains;
+  final List<String> accounts;
+  final String? dappUrl;
+  final String? iconUrl;
+  final int? expiry;
+  final int? approvedAt;
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'topic': topic,
+      'dappName': dappName,
+      if (dappUrl != null) 'dappUrl': dappUrl,
+      if (iconUrl != null) 'iconUrl': iconUrl,
+      'chains': chains,
+      'accounts': accounts,
+      if (expiry != null) 'expiry': expiry,
+      if (approvedAt != null) 'approvedAt': approvedAt,
+    };
+  }
+}
 
 class PendingWcRequest {
   PendingWcRequest({
@@ -43,6 +99,7 @@ class WalletConnectService extends ChangeNotifier {
   final String projectId;
 
   final List<String> activeSessions = [];
+  final List<WalletSessionInfo> _sessionInfos = [];
 
   SignClient? _client;
   String _status = 'disconnected';
@@ -58,6 +115,8 @@ class WalletConnectService extends ChangeNotifier {
   String? get lastRequestDebug => _lastRequestDebug;
   String? get lastErrorDebug => _lastErrorDebug;
   PendingWcRequest? get pendingRequest => _pendingRequest;
+  List<WalletSessionInfo> getActiveSessions() =>
+      List<WalletSessionInfo>.unmodifiable(_sessionInfos);
 
   Future<void> init() async {
     await initWalletConnect();
@@ -92,6 +151,8 @@ class WalletConnectService extends ChangeNotifier {
 
       _client = client;
 
+      await _loadPersistedSessions();
+
       client.onSessionProposal.subscribe(_onSessionProposal);
       client.onSessionRequest.subscribe(_onSessionRequest);
       client.onSessionConnect.subscribe(_onSessionConnect);
@@ -101,7 +162,7 @@ class WalletConnectService extends ChangeNotifier {
         _registerAccountAndHandlers();
       }
 
-      _refreshActiveSessions();
+      await _refreshActiveSessions();
       _status = 'ready';
     } catch (error, stackTrace) {
       _status = 'error: $error';
@@ -156,6 +217,53 @@ class WalletConnectService extends ChangeNotifier {
     }
   }
 
+  Future<void> _loadPersistedSessions() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_sessionsStorageKey);
+      if (raw == null || raw.isEmpty) {
+        return;
+      }
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return;
+      }
+      final infos = decoded
+          .whereType<Map<String, dynamic>>()
+          .map(WalletSessionInfo.fromJson)
+          .toList(growable: false);
+      _setSessionInfos(infos);
+    } catch (error) {
+      debugPrint('Failed to load persisted WC sessions: $error');
+    }
+  }
+
+  Future<void> _persistSessions() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = jsonEncode(
+        _sessionInfos.map((info) => info.toJson()).toList(growable: false),
+      );
+      await prefs.setString(_sessionsStorageKey, encoded);
+    } catch (error) {
+      debugPrint('Failed to persist WC sessions: $error');
+    }
+  }
+
+  void _setSessionInfos(List<WalletSessionInfo> infos) {
+    _sessionInfos
+      ..clear()
+      ..addAll(infos);
+    activeSessions
+      ..clear()
+      ..addAll(
+        infos
+            .map((info) => info.dappName)
+            .where((name) => name.isNotEmpty),
+      );
+    notifyListeners();
+  }
+
   Future<void> pairUri(String uri) async {
     final client = _client;
     if (client == null) {
@@ -183,6 +291,26 @@ class WalletConnectService extends ChangeNotifier {
     }
 
     notifyListeners();
+  }
+
+  Future<void> disconnectSession(String topic) async {
+    final client = _client;
+    if (client == null) {
+      return;
+    }
+
+    try {
+      await client.disconnect(
+        topic: topic,
+        reason: Errors.getSdkError(Errors.USER_DISCONNECTED),
+      );
+      _lastErrorDebug = '';
+    } catch (error, stackTrace) {
+      _lastErrorDebug = 'disconnect failed: $error';
+      debugPrint('WalletConnect disconnect failed: $error\n$stackTrace');
+    }
+
+    await _refreshActiveSessions();
   }
 
   Future<void> _onSessionProposal(SessionProposalEvent? event) async {
@@ -293,46 +421,86 @@ class WalletConnectService extends ChangeNotifier {
       return;
     }
 
-    final dappName = proposal.proposer.metadata.name ?? 'unknown dapp';
-    if (!activeSessions.contains(dappName)) {
-      activeSessions.add(dappName);
-    }
     _status = 'connected';
     debugLastProposalLog =
         'approved namespaces=${namespaces.keys.toList()}';
     debugLastError = '';
     _lastErrorDebug = '';
     notifyListeners();
+    unawaited(_refreshActiveSessions());
   }
 
   void _onSessionConnect(SessionConnect? event) {
     if (event == null) {
       return;
     }
-    _refreshActiveSessions();
+    unawaited(_refreshActiveSessions());
   }
 
   void _onSessionDelete(SessionDelete? event) {
-    activeSessions.clear();
     _status = 'ready';
     _clearPendingRequest();
+    unawaited(_refreshActiveSessions());
   }
 
-  void _refreshActiveSessions() {
+  Future<void> _refreshActiveSessions() async {
     final client = _client;
     if (client == null) {
       return;
     }
 
-    activeSessions
-      ..clear()
-      ..addAll(
-        client.sessions
-            .getAll()
-            .map((session) => session.peer.metadata.name)
-            .where((name) => name.isNotEmpty),
-      );
-    notifyListeners();
+    final previous = <String, WalletSessionInfo>{
+      for (final info in _sessionInfos) info.topic: info,
+    };
+    final sessions = client.sessions.getAll();
+    final infos = sessions
+        .map(
+          (session) => _sessionDataToInfo(
+            session,
+            approvedAt: previous[session.topic]?.approvedAt,
+          ),
+        )
+        .toList(growable: false);
+    _setSessionInfos(infos);
+    await _persistSessions();
+  }
+
+  WalletSessionInfo _sessionDataToInfo(
+    SessionData session, {
+    int? approvedAt,
+  }) {
+    final metadata = session.peer.metadata;
+    final iconUrl =
+        metadata.icons.isNotEmpty ? metadata.icons.first : null;
+
+    final Set<String> chainIds = <String>{};
+    final List<String> accounts = <String>[];
+
+    session.namespaces.forEach((_, namespace) {
+      accounts.addAll(namespace.accounts);
+      final namespaceChains = namespace.chains;
+      if (namespaceChains != null && namespaceChains.isNotEmpty) {
+        chainIds.addAll(namespaceChains);
+      } else {
+        for (final account in namespace.accounts) {
+          final chain = _chainFromAccount(account);
+          if (chain != null) {
+            chainIds.add(chain);
+          }
+        }
+      }
+    });
+
+    return WalletSessionInfo(
+      topic: session.topic,
+      dappName: metadata.name,
+      dappUrl: metadata.url,
+      iconUrl: iconUrl,
+      chains: chainIds.toList(growable: false),
+      accounts: accounts.toList(growable: false),
+      expiry: session.expiry,
+      approvedAt: approvedAt ?? DateTime.now().millisecondsSinceEpoch,
+    );
   }
 
   @override
@@ -673,5 +841,13 @@ class WalletConnectService extends ChangeNotifier {
       return value;
     }
     return '${value.substring(0, 12)}…';
+  }
+
+  String? _chainFromAccount(String account) {
+    final parts = account.split(':');
+    if (parts.length >= 2) {
+      return '${parts[0]}:${parts[1]}';
+    }
+    return null;
   }
 }

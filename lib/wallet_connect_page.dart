@@ -43,8 +43,20 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
     super.dispose();
   }
 
+  String _shortAccount(String account) {
+    final parts = account.split(':');
+    final address = parts.length >= 3 ? parts[2] : account;
+    if (address.length <= 10) {
+      return address;
+    }
+    final start = address.substring(0, 6);
+    final end = address.substring(address.length - 4);
+    return '$start…$end';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final sessions = service.getActiveSessions();
     return Scaffold(
       appBar: AppBar(
         title: const Text('WalletConnect v2'),
@@ -73,15 +85,44 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
             const Text('Active sessions:'),
             const SizedBox(height: 8),
             Expanded(
-              child: ListView.builder(
-                itemCount: service.activeSessions.length,
-                itemBuilder: (context, index) {
-                  final session = service.activeSessions[index];
-                  return ListTile(
-                    title: Text(session),
-                  );
-                },
-              ),
+              child: sessions.isEmpty
+                  ? const Center(
+                      child: Text('No active sessions'),
+                    )
+                  : ListView.builder(
+                      itemCount: sessions.length,
+                      itemBuilder: (context, index) {
+                        final session = sessions[index];
+                        final chainsLabel = session.chains.isNotEmpty
+                            ? 'Chains: ${session.chains.join(', ')}'
+                            : null;
+                        final accountsLabel = session.accounts.isNotEmpty
+                            ? 'Accounts: ${session.accounts.map(_shortAccount).join(', ')}'
+                            : null;
+                        return ListTile(
+                          title: Text(session.dappName.isNotEmpty
+                              ? session.dappName
+                              : session.topic),
+                          subtitle: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (chainsLabel != null) Text(chainsLabel),
+                              if (accountsLabel != null) Text(accountsLabel),
+                              if (session.dappUrl != null &&
+                                  session.dappUrl!.isNotEmpty)
+                                Text(session.dappUrl!),
+                            ],
+                          ),
+                          trailing: TextButton(
+                            onPressed: () async {
+                              await service.disconnectSession(session.topic);
+                            },
+                            child: const Text('Disconnect'),
+                          ),
+                        );
+                      },
+                    ),
             ),
             const SizedBox(height: 16),
             Text(
