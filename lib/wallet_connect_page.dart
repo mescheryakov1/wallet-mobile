@@ -179,7 +179,9 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
             ),
             const SizedBox(height: 16),
             Text(
-              'Pending request: ${service.pendingRequest?.method ?? 'none'}',
+              'Pending request: '
+              '${service.pendingRequest?.method ?? 'none'}'
+              '${service.pendingRequest?.chainId != null ? ' on ${service.pendingRequest!.chainId}' : ''}',
             ),
             if (service.pendingRequest != null) ...[
               const SizedBox(height: 8),

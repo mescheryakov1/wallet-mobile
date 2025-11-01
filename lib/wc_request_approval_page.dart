@@ -198,6 +198,12 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
         messageRaw != null ? _decodeHexToUtf8(messageRaw) : null;
 
     return <Widget>[
+      if (request.chainId != null) ...[
+        const Text('Chain'),
+        const SizedBox(height: 4),
+        SelectableText(request.chainId!),
+        const SizedBox(height: 12),
+      ],
       if (address != null) ...[
         const Text('Address'),
         const SizedBox(height: 4),
@@ -241,6 +247,11 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
     }
 
     final rows = <Widget>[];
+    if (request.chainId != null) {
+      rows
+        ..add(_detailRow('Chain', request.chainId))
+        ..add(const SizedBox(height: 8));
+    }
     if (transaction != null) {
       rows.addAll([
         _detailRow('From', transaction['from']),

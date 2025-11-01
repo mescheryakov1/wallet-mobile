@@ -72,12 +72,38 @@ class PendingWcRequest {
     required this.requestId,
     required this.method,
     required this.params,
+    this.chainId,
   });
 
   final String topic;
   final int requestId;
   final String method;
   final dynamic params;
+  final String? chainId;
+}
+
+class _RequestExtraction {
+  const _RequestExtraction({
+    required this.requestId,
+    required this.params,
+    this.chainId,
+  });
+
+  final int requestId;
+  final dynamic params;
+  final String? chainId;
+}
+
+class _RequestValidationResult {
+  const _RequestValidationResult({
+    required this.allowed,
+    required this.methodAllowed,
+    required this.chainAllowed,
+  });
+
+  final bool allowed;
+  final bool methodAllowed;
+  final bool chainAllowed;
 }
 
 class WalletConnectRequestException implements Exception {
@@ -172,10 +198,13 @@ class WalletConnectService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _setPendingRequest(String method, String topic, dynamic params) {
+  _RequestExtraction _extractRequestDetails(
+    String topic,
+    String method,
+    dynamic params,
+  ) {
     final client = _client;
     SessionRequest? matchedRequest;
-    _lastErrorDebug = '';
 
     if (client != null) {
       try {
@@ -196,18 +225,208 @@ class WalletConnectService extends ChangeNotifier {
     final requestId =
         matchedRequest?.id ?? DateTime.now().millisecondsSinceEpoch;
     final requestParams = matchedRequest?.params ?? params;
+    final extractedChain = matchedRequest?.chainId ??
+        _deriveChainIdFromParams(method, requestParams);
 
-    if (matchedRequest == null && (_lastErrorDebug == null || _lastErrorDebug!.isEmpty)) {
+    if (matchedRequest == null &&
+        (_lastErrorDebug == null || _lastErrorDebug!.isEmpty)) {
       _lastErrorDebug = 'pending request not found, using fallback id';
     }
 
-    _pendingRequest = PendingWcRequest(
-      topic: topic,
+    return _RequestExtraction(
       requestId: requestId,
-      method: method,
       params: requestParams,
+      chainId: _normalizeChainId(extractedChain),
     );
-    notifyListeners();
+  }
+
+  bool isRequestAllowed({
+    required String topic,
+    required String method,
+    String? chainId,
+  }) {
+    final session = _getSessionByTopic(topic);
+    if (session == null) {
+      return false;
+    }
+    final normalizedChain = _normalizeChainId(chainId);
+    final result = _evaluateSessionPermissions(
+      session,
+      method,
+      normalizedChain,
+    );
+    return result.allowed;
+  }
+
+  void _validateBeforePrompt({
+    required String topic,
+    required String method,
+    String? chainId,
+  }) {
+    final client = _client;
+    if (client == null) {
+      throw WalletConnectError(
+        code: 5000,
+        message: 'WalletConnect not initialized',
+      );
+    }
+
+    final session = _getSessionByTopic(topic);
+    if (session == null) {
+      throw WalletConnectError(
+        code: 5000,
+        message: 'Session not found',
+      );
+    }
+
+    final normalizedChain = _normalizeChainId(chainId);
+    final result = _evaluateSessionPermissions(
+      session,
+      method,
+      normalizedChain,
+    );
+
+    if (result.allowed) {
+      return;
+    }
+
+    if (!result.chainAllowed && normalizedChain != null) {
+      throw WalletConnectError(
+        code: 5100,
+        message: 'Chain not approved for this session.',
+      );
+    }
+
+    if (!result.methodAllowed) {
+      throw WalletConnectError(
+        code: 4200,
+        message: 'Method not approved for this session.',
+      );
+    }
+
+    throw WalletConnectError(
+      code: 4200,
+      message: 'Method not approved for this session.',
+    );
+  }
+
+  SessionData? _getSessionByTopic(String topic) {
+    final client = _client;
+    if (client == null) {
+      return null;
+    }
+
+    try {
+      return client.sessions.get(topic);
+    } catch (_) {
+      // ignored, fall back to scanning all sessions
+    }
+
+    try {
+      final sessions = client.sessions.getAll();
+      for (final session in sessions) {
+        if (session.topic == topic) {
+          return session;
+        }
+      }
+    } catch (_) {
+      // ignore lookup errors
+    }
+    return null;
+  }
+
+  _RequestValidationResult _evaluateSessionPermissions(
+    SessionData session,
+    String method,
+    String? normalizedChain,
+  ) {
+    final normalizedMethod = method.toLowerCase();
+    bool methodAllowed = false;
+    bool chainAllowed = normalizedChain == null;
+    bool allowed = false;
+
+    session.namespaces.forEach((_, namespace) {
+      if (allowed) {
+        return;
+      }
+      final namespaceMethods =
+          namespace.methods.map((value) => value.toLowerCase()).toSet();
+      final namespaceChains = _extractChainsFromNamespace(namespace)
+          .map(_normalizeChainId)
+          .whereType<String>()
+          .toSet();
+
+      if (namespaceMethods.contains(normalizedMethod)) {
+        methodAllowed = true;
+      }
+
+      if (!chainAllowed && normalizedChain != null &&
+          namespaceChains.contains(normalizedChain)) {
+        chainAllowed = true;
+      }
+
+      final chainMatches = normalizedChain == null ||
+          namespaceChains.contains(normalizedChain);
+      if (namespaceMethods.contains(normalizedMethod) && chainMatches) {
+        allowed = true;
+      }
+    });
+
+    return _RequestValidationResult(
+      allowed: allowed,
+      methodAllowed: methodAllowed,
+      chainAllowed: chainAllowed,
+    );
+  }
+
+  String? _normalizeChainId(String? chainId) {
+    if (chainId == null) {
+      return null;
+    }
+    var value = chainId.trim();
+    if (value.isEmpty) {
+      return null;
+    }
+    value = value.toLowerCase();
+    if (value.startsWith('0x')) {
+      final parsed = int.tryParse(value.substring(2), radix: 16);
+      if (parsed != null) {
+        return 'eip155:$parsed';
+      }
+    }
+    if (!value.contains(':')) {
+      final parsed = int.tryParse(value);
+      if (parsed != null) {
+        return 'eip155:$parsed';
+      }
+      return value;
+    }
+
+    final parts = value.split(':');
+    if (parts.length == 2 && parts[1].startsWith('0x')) {
+      final parsed = int.tryParse(parts[1].substring(2), radix: 16);
+      if (parsed != null) {
+        return '${parts[0]}:$parsed';
+      }
+    }
+    return value;
+  }
+
+  String? _deriveChainIdFromParams(String method, dynamic params) {
+    if (method == 'eth_sendTransaction') {
+      final list = _asList(params);
+      if (list.isNotEmpty && list.first is Map) {
+        final tx = Map<String, dynamic>.from(list.first as Map);
+        final chainValue = tx['chainId'];
+        if (chainValue is String) {
+          return _normalizeChainId(chainValue);
+        }
+        if (chainValue is int) {
+          return _normalizeChainId(chainValue.toString());
+        }
+      }
+    }
+    return null;
   }
 
   void _clearPendingRequest() {
@@ -573,11 +792,34 @@ class WalletConnectService extends ChangeNotifier {
     _cancelPendingCompleterIfActive();
 
     _pendingRequestCompleter = Completer<String>();
-    _lastRequestDebug = 'personal_sign topic=$topic params=$params';
-    _lastErrorDebug = '';
-    notifyListeners();
+    final extraction = _extractRequestDetails(topic, 'personal_sign', params);
 
-    _setPendingRequest('personal_sign', topic, params);
+    try {
+      _validateBeforePrompt(
+        topic: topic,
+        method: 'personal_sign',
+        chainId: extraction.chainId,
+      );
+    } on WalletConnectError catch (error) {
+      _pendingRequestCompleter = null;
+      _pendingRequest = null;
+      _lastRequestDebug =
+          'auto-reject personal_sign on ${extraction.chainId ?? 'unknown chain'}: ${error.message}';
+      _lastErrorDebug = 'auto reject ${error.code}: ${error.message}';
+      notifyListeners();
+      throw error;
+    }
+
+    _lastRequestDebug = 'personal_sign topic=$topic params=${extraction.params}';
+    _lastErrorDebug = '';
+    _pendingRequest = PendingWcRequest(
+      topic: topic,
+      requestId: extraction.requestId,
+      method: 'personal_sign',
+      params: extraction.params,
+      chainId: extraction.chainId,
+    );
+    notifyListeners();
 
     try {
       final result = await _pendingRequestCompleter!.future;
@@ -594,11 +836,36 @@ class WalletConnectService extends ChangeNotifier {
     _cancelPendingCompleterIfActive();
 
     _pendingRequestCompleter = Completer<String>();
-    _lastRequestDebug = 'eth_sendTransaction topic=$topic params=$params';
-    _lastErrorDebug = '';
-    notifyListeners();
+    final extraction =
+        _extractRequestDetails(topic, 'eth_sendTransaction', params);
 
-    _setPendingRequest('eth_sendTransaction', topic, params);
+    try {
+      _validateBeforePrompt(
+        topic: topic,
+        method: 'eth_sendTransaction',
+        chainId: extraction.chainId,
+      );
+    } on WalletConnectError catch (error) {
+      _pendingRequestCompleter = null;
+      _pendingRequest = null;
+      _lastRequestDebug =
+          'auto-reject eth_sendTransaction on ${extraction.chainId ?? 'unknown chain'}: ${error.message}';
+      _lastErrorDebug = 'auto reject ${error.code}: ${error.message}';
+      notifyListeners();
+      throw error;
+    }
+
+    _lastRequestDebug =
+        'eth_sendTransaction topic=$topic params=${extraction.params}';
+    _lastErrorDebug = '';
+    _pendingRequest = PendingWcRequest(
+      topic: topic,
+      requestId: extraction.requestId,
+      method: 'eth_sendTransaction',
+      params: extraction.params,
+      chainId: extraction.chainId,
+    );
+    notifyListeners();
 
     try {
       final result = await _pendingRequestCompleter!.future;
@@ -617,7 +884,7 @@ class WalletConnectService extends ChangeNotifier {
         _pendingRequestCompleter!.completeError(
           WalletConnectError(
             code: 4001,
-            message: 'User rejected the request',
+            message: 'User rejected the request.',
           ),
         );
       }
@@ -639,13 +906,13 @@ class WalletConnectService extends ChangeNotifier {
       completer.completeError(
         WalletConnectError(
           code: 4001,
-          message: 'User rejected the request',
+          message: 'User rejected the request.',
         ),
       );
     }
     _lastRequestDebug =
         'rejected ${request.method} id=${request.requestId} via completer';
-    _lastErrorDebug = 'error 4001: User rejected the request';
+    _lastErrorDebug = 'error 4001: User rejected the request.';
     _pendingRequestCompleter = null;
     _clearPendingRequest();
   }
@@ -850,19 +1117,15 @@ class WalletConnectService extends ChangeNotifier {
     }
     final chains = <String>{};
     for (final account in accounts) {
-      final chain = _chainFromAccount(account);
-      if (chain != null) {
-        chains.add(chain);
+      final parts = account.split(':');
+      if (parts.length >= 2) {
+        final candidate = '${parts[0]}:${parts[1]}';
+        final normalized = _normalizeChainId(candidate);
+        if (normalized != null) {
+          chains.add(normalized);
+        }
       }
     }
     return chains.toList(growable: false);
-  }
-
-  String? _chainFromAccount(String account) {
-    final parts = account.split(':');
-    if (parts.length >= 2) {
-      return '${parts[0]}:${parts[1]}';
-    }
-    return null;
   }
 }
