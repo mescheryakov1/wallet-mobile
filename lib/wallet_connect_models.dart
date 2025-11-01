@@ -6,7 +6,7 @@ enum WalletConnectRequestStatus { pending, approved, rejected }
 /// Basic metadata describing the connected dApp.
 @immutable
 class WalletConnectPeerMetadata {
-  const WalletConnectPeerMetadata({
+  WalletConnectPeerMetadata({
     required this.name,
     this.description,
     this.url,
@@ -25,7 +25,7 @@ class WalletConnectPeerMetadata {
 /// Snapshot of an approved WalletConnect session in the app.
 @immutable
 class WalletSessionInfo {
-  const WalletSessionInfo({
+  WalletSessionInfo({
     required this.topic,
     required this.dappName,
     required this.chains,
@@ -182,7 +182,7 @@ class WalletConnectActivityEntry {
 
 @immutable
 class WalletConnectPendingRequest {
-  const WalletConnectPendingRequest({
+  WalletConnectPendingRequest({
     required this.topic,
     required this.requestId,
     required this.method,
