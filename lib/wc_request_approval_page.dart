@@ -66,7 +66,7 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка: $error')),
+        SnackBar(content: Text('Error: $error')),
       );
     } finally {
       if (mounted) {
@@ -100,7 +100,7 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка: $error')),
+        SnackBar(content: Text('Error: $error')),
       );
     } finally {
       if (mounted) {
@@ -122,7 +122,7 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
         padding: const EdgeInsets.all(16),
         child: request == null
             ? const Center(
-                child: Text('Нет активных запросов для подтверждения.'),
+                child: Text('No pending requests to review.'),
               )
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

@@ -37,8 +37,11 @@ class WalletSessionInfo {
     required this.dappName,
     required this.chains,
     required this.accounts,
+    this.methods = const <String>[],
+    this.events = const <String>[],
     this.dappUrl,
     this.iconUrl,
+    this.dappDescription,
     this.expiry,
     this.approvedAt,
   });
@@ -49,11 +52,20 @@ class WalletSessionInfo {
       dappName: json['dappName'] as String? ?? '',
       dappUrl: json['dappUrl'] as String?,
       iconUrl: json['iconUrl'] as String?,
+      dappDescription: json['dappDescription'] as String?,
       chains: (json['chains'] as List?)
               ?.whereType<String>()
               .toList(growable: false) ??
           const <String>[],
       accounts: (json['accounts'] as List?)
+              ?.whereType<String>()
+              .toList(growable: false) ??
+          const <String>[],
+      methods: (json['methods'] as List?)
+              ?.whereType<String>()
+              .toList(growable: false) ??
+          const <String>[],
+      events: (json['events'] as List?)
               ?.whereType<String>()
               .toList(growable: false) ??
           const <String>[],
@@ -66,8 +78,11 @@ class WalletSessionInfo {
   final String dappName;
   final List<String> chains;
   final List<String> accounts;
+  final List<String> methods;
+  final List<String> events;
   final String? dappUrl;
   final String? iconUrl;
+  final String? dappDescription;
   final int? expiry;
   final int? approvedAt;
 
@@ -77,12 +92,45 @@ class WalletSessionInfo {
       'dappName': dappName,
       if (dappUrl != null) 'dappUrl': dappUrl,
       if (iconUrl != null) 'iconUrl': iconUrl,
+      if (dappDescription != null) 'dappDescription': dappDescription,
       'chains': chains,
       'accounts': accounts,
+      'methods': methods,
+      'events': events,
       if (expiry != null) 'expiry': expiry,
       if (approvedAt != null) 'approvedAt': approvedAt,
     };
   }
+}
+
+class WalletConnectPeerMetadata {
+  const WalletConnectPeerMetadata({
+    required this.name,
+    this.description,
+    this.url,
+    this.iconUrl,
+  });
+
+  final String name;
+  final String? description;
+  final String? url;
+  final String? iconUrl;
+}
+
+class WalletConnectActivityEntry {
+  WalletConnectActivityEntry({
+    required this.method,
+    required this.summary,
+    required this.success,
+    this.chainId,
+    DateTime? timestamp,
+  }) : timestamp = timestamp ?? DateTime.now();
+
+  final String method;
+  final String summary;
+  final bool success;
+  final String? chainId;
+  final DateTime timestamp;
 }
 
 class PendingWcRequest {
@@ -164,6 +212,7 @@ class WalletConnectService extends ChangeNotifier {
   String? _lastErrorDebug;
   PendingWcRequest? _pendingRequest;
   Completer<String>? _pendingRequestCompleter;
+  WalletConnectActivityEntry? _lastActivityEntry;
 
   String get status => _status;
   String? get lastRequestDebug => _lastRequestDebug;
@@ -171,6 +220,39 @@ class WalletConnectService extends ChangeNotifier {
   PendingWcRequest? get pendingRequest => _pendingRequest;
   List<WalletSessionInfo> getActiveSessions() =>
       List<WalletSessionInfo>.unmodifiable(_sessionInfos);
+  bool get isConnected => _sessionInfos.isNotEmpty;
+  WalletSessionInfo? get primarySessionInfo =>
+      _sessionInfos.isEmpty ? null : _sessionInfos.first;
+  WalletConnectPeerMetadata? get currentPeerMetadata {
+    final session = primarySessionInfo;
+    if (session == null) {
+      return null;
+    }
+    return WalletConnectPeerMetadata(
+      name: session.dappName,
+      description: session.dappDescription,
+      url: session.dappUrl,
+      iconUrl: session.iconUrl,
+    );
+  }
+
+  List<String> getApprovedChains() {
+    final session = primarySessionInfo;
+    if (session == null) {
+      return const <String>[];
+    }
+    return List<String>.from(session.chains);
+  }
+
+  List<String> getApprovedMethods() {
+    final session = primarySessionInfo;
+    if (session == null) {
+      return const <String>[];
+    }
+    return List<String>.from(session.methods);
+  }
+
+  WalletConnectActivityEntry? get lastActivityEntry => _lastActivityEntry;
 
   Future<void> init() async {
     await initWalletConnect();
@@ -581,7 +663,24 @@ class WalletConnectService extends ChangeNotifier {
             .map((info) => info.dappName)
             .where((name) => name.isNotEmpty),
       );
+    if (infos.isEmpty) {
+      _lastActivityEntry = null;
+    }
     notifyListeners();
+  }
+
+  void _recordActivity({
+    required String method,
+    required bool success,
+    required String summary,
+    String? chainId,
+  }) {
+    _lastActivityEntry = WalletConnectActivityEntry(
+      method: method,
+      summary: summary,
+      success: success,
+      chainId: chainId,
+    );
   }
 
   Future<void> pairUri(String uri) async {
@@ -918,11 +1017,15 @@ class WalletConnectService extends ChangeNotifier {
 
     final Set<String> chainIds = <String>{};
     final List<String> accounts = <String>[];
+    final Set<String> methods = <String>{};
+    final Set<String> events = <String>{};
 
     session.namespaces.forEach((_, namespace) {
       accounts.addAll(namespace.accounts);
       final namespaceChains = _extractChainsFromNamespace(namespace);
       chainIds.addAll(namespaceChains);
+      methods.addAll(namespace.methods);
+      events.addAll(namespace.events);
     });
 
     return WalletSessionInfo(
@@ -930,8 +1033,11 @@ class WalletConnectService extends ChangeNotifier {
       dappName: metadata.name,
       dappUrl: metadata.url,
       iconUrl: iconUrl,
+      dappDescription: metadata.description,
       chains: chainIds.toList(growable: false),
       accounts: accounts.toList(growable: false),
+      methods: methods.map((value) => value.toLowerCase()).toList(growable: false),
+      events: events.toList(growable: false),
       expiry: session.expiry,
       approvedAt: approvedAt ?? DateTime.now().millisecondsSinceEpoch,
     );
@@ -1039,6 +1145,12 @@ class WalletConnectService extends ChangeNotifier {
       _lastRequestDebug =
           'auto-reject personal_sign on ${extraction.chainId ?? 'unknown chain'}: ${error.message}';
       _lastErrorDebug = 'auto reject ${error.code}: ${error.message}';
+      _recordActivity(
+        method: 'personal_sign',
+        success: false,
+        summary: error.message,
+        chainId: extraction.chainId,
+      );
       notifyListeners();
       throw error;
     }
@@ -1060,6 +1172,12 @@ class WalletConnectService extends ChangeNotifier {
       final result = await _pendingRequestCompleter!.future;
       _lastRequestDebug =
           'personal_sign approved result=${_summarizeResult(result)}';
+      _recordActivity(
+        method: 'personal_sign',
+        success: true,
+        summary: result,
+        chainId: extraction.chainId,
+      );
       notifyListeners();
       return result;
     } finally {
@@ -1086,6 +1204,12 @@ class WalletConnectService extends ChangeNotifier {
       _lastRequestDebug =
           'auto-reject eth_sendTransaction on ${extraction.chainId ?? 'unknown chain'}: ${error.message}';
       _lastErrorDebug = 'auto reject ${error.code}: ${error.message}';
+      _recordActivity(
+        method: 'eth_sendTransaction',
+        success: false,
+        summary: error.message,
+        chainId: extraction.chainId,
+      );
       notifyListeners();
       throw error;
     }
@@ -1107,6 +1231,12 @@ class WalletConnectService extends ChangeNotifier {
       final result = await _pendingRequestCompleter!.future;
       _lastRequestDebug =
           'eth_sendTransaction approved result=${_summarizeResult(result)}';
+      _recordActivity(
+        method: 'eth_sendTransaction',
+        success: true,
+        summary: result,
+        chainId: extraction.chainId,
+      );
       notifyListeners();
       return result;
     } finally {
@@ -1149,6 +1279,12 @@ class WalletConnectService extends ChangeNotifier {
     _lastRequestDebug =
         'rejected ${request.method} id=${request.requestId} via completer';
     _lastErrorDebug = 'error 4001: User rejected the request.';
+    _recordActivity(
+      method: request.method,
+      success: false,
+      summary: 'User rejected the request.',
+      chainId: request.chainId,
+    );
     _pendingRequestCompleter = null;
     _clearPendingRequest();
   }
@@ -1168,6 +1304,12 @@ class WalletConnectService extends ChangeNotifier {
       _lastRequestDebug =
           'approved ${request.method} id=${request.requestId} result=${_summarizeResult(result)}';
       _lastErrorDebug = '';
+      _recordActivity(
+        method: request.method,
+        success: true,
+        summary: result,
+        chainId: request.chainId,
+      );
       notifyListeners();
     } catch (error, stackTrace) {
       debugPrint('WalletConnect approve error: $error\n$stackTrace');
@@ -1178,6 +1320,12 @@ class WalletConnectService extends ChangeNotifier {
         completer.completeError(wrappedError);
       }
       _lastErrorDebug = 'approve failed: ${wrappedError.message}';
+      _recordActivity(
+        method: request.method,
+        success: false,
+        summary: wrappedError.message,
+        chainId: request.chainId,
+      );
       notifyListeners();
       throw wrappedError;
     } finally {
