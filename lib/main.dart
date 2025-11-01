@@ -79,7 +79,7 @@ class _WalletHomePageState extends State<WalletHomePage> {
       return;
     }
 
-    final result = await _controller.sendTransaction(
+    final result = await _controller.sendManualTransaction(
       toAddress: recipient,
       amountInEth: amount,
     );
@@ -950,7 +950,7 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
     }
   }
 
-  Future<ActionResult> sendTransaction({
+  Future<ActionResult> sendManualTransaction({
     required String toAddress,
     required String amountInEth,
   }) async {
