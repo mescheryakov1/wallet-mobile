@@ -32,108 +32,6 @@ final Set<String> _supportedMethodSet =
 final Set<String> _supportedEventSet =
     _supportedEvents.map((event) => event.toLowerCase()).toSet();
 
-class WalletSessionInfo {
-  WalletSessionInfo({
-    required this.topic,
-    required this.dappName,
-    required this.chains,
-    required this.accounts,
-    this.methods = const <String>[],
-    this.events = const <String>[],
-    this.dappUrl,
-    this.iconUrl,
-    this.dappDescription,
-    this.expiry,
-    this.approvedAt,
-  });
-
-  factory WalletSessionInfo.fromJson(Map<String, dynamic> json) {
-    return WalletSessionInfo(
-      topic: json['topic'] as String? ?? '',
-      dappName: json['dappName'] as String? ?? '',
-      dappUrl: json['dappUrl'] as String?,
-      iconUrl: json['iconUrl'] as String?,
-      dappDescription: json['dappDescription'] as String?,
-      chains: (json['chains'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
-          const <String>[],
-      accounts: (json['accounts'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
-          const <String>[],
-      methods: (json['methods'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
-          const <String>[],
-      events: (json['events'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
-          const <String>[],
-      expiry: json['expiry'] as int?,
-      approvedAt: json['approvedAt'] as int?,
-    );
-  }
-
-  final String topic;
-  final String dappName;
-  final List<String> chains;
-  final List<String> accounts;
-  final List<String> methods;
-  final List<String> events;
-  final String? dappUrl;
-  final String? iconUrl;
-  final String? dappDescription;
-  final int? expiry;
-  final int? approvedAt;
-
-  Map<String, dynamic> toJson() {
-    return <String, dynamic>{
-      'topic': topic,
-      'dappName': dappName,
-      if (dappUrl != null) 'dappUrl': dappUrl,
-      if (iconUrl != null) 'iconUrl': iconUrl,
-      if (dappDescription != null) 'dappDescription': dappDescription,
-      'chains': chains,
-      'accounts': accounts,
-      'methods': methods,
-      'events': events,
-      if (expiry != null) 'expiry': expiry,
-      if (approvedAt != null) 'approvedAt': approvedAt,
-    };
-  }
-}
-
-class WalletConnectPeerMetadata {
-  const WalletConnectPeerMetadata({
-    required this.name,
-    this.description,
-    this.url,
-    this.iconUrl,
-  });
-
-  final String name;
-  final String? description;
-  final String? url;
-  final String? iconUrl;
-}
-
-class WalletConnectActivityEntry {
-  WalletConnectActivityEntry({
-    required this.method,
-    required this.summary,
-    required this.success,
-    this.chainId,
-    DateTime? timestamp,
-  }) : timestamp = timestamp ?? DateTime.now();
-
-  final String method;
-  final String summary;
-  final bool success;
-  final String? chainId;
-  final DateTime timestamp;
-}
-
 class _RequestExtraction {
   const _RequestExtraction({
     required this.requestId,
@@ -216,11 +114,19 @@ class WalletConnectService extends ChangeNotifier {
     if (session == null) {
       return null;
     }
+    if (session.peer != null) {
+      return session.peer;
+    }
+    final icons = <String>[];
+    final iconUrl = session.iconUrl;
+    if (iconUrl != null && iconUrl.isNotEmpty) {
+      icons.add(iconUrl);
+    }
     return WalletConnectPeerMetadata(
       name: session.dappName,
       description: session.dappDescription,
       url: session.dappUrl,
-      iconUrl: session.iconUrl,
+      icons: icons,
     );
   }
 
@@ -664,12 +570,21 @@ class WalletConnectService extends ChangeNotifier {
     required bool success,
     required String summary,
     String? chainId,
+    int? requestId,
+    String? result,
+    String? error,
   }) {
+    final status = success
+        ? WalletConnectRequestStatus.approved
+        : WalletConnectRequestStatus.rejected;
     _lastActivityEntry = WalletConnectActivityEntry(
+      requestId: requestId,
       method: method,
       summary: summary,
-      success: success,
+      status: status,
       chainId: chainId,
+      result: result,
+      error: error,
     );
   }
 
@@ -1023,6 +938,12 @@ class WalletConnectService extends ChangeNotifier {
     final metadata = session.peer.metadata;
     final iconUrl =
         metadata.icons.isNotEmpty ? metadata.icons.first : null;
+    final peerMetadata = WalletConnectPeerMetadata(
+      name: metadata.name,
+      description: metadata.description,
+      url: metadata.url,
+      icons: metadata.icons,
+    );
 
     final Set<String> chainIds = <String>{};
     final List<String> accounts = <String>[];
@@ -1049,6 +970,8 @@ class WalletConnectService extends ChangeNotifier {
       events: events.toList(growable: false),
       expiry: session.expiry,
       approvedAt: approvedAt ?? DateTime.now().millisecondsSinceEpoch,
+      peer: peerMetadata,
+      isActive: true,
     );
   }
 
@@ -1174,6 +1097,8 @@ class WalletConnectService extends ChangeNotifier {
         success: false,
         summary: error.message,
         chainId: extraction.chainId,
+        requestId: request.requestId,
+        error: error.message,
       );
       notifyListeners();
       throw error;
@@ -1204,6 +1129,8 @@ class WalletConnectService extends ChangeNotifier {
         success: true,
         summary: result,
         chainId: extraction.chainId,
+        requestId: request.requestId,
+        result: result,
       );
       notifyListeners();
       return result;
@@ -1248,6 +1175,8 @@ class WalletConnectService extends ChangeNotifier {
         success: false,
         summary: error.message,
         chainId: extraction.chainId,
+        requestId: request.requestId,
+        error: error.message,
       );
       notifyListeners();
       throw error;
@@ -1278,6 +1207,8 @@ class WalletConnectService extends ChangeNotifier {
         success: true,
         summary: result,
         chainId: extraction.chainId,
+        requestId: request.requestId,
+        result: result,
       );
       notifyListeners();
       return result;
@@ -1336,6 +1267,8 @@ class WalletConnectService extends ChangeNotifier {
       success: false,
       summary: 'User rejected the request.',
       chainId: request.chainId,
+      requestId: request.requestId,
+      error: 'User rejected the request.',
     );
     _pendingRequestCompleter = null;
     _clearPendingRequest();
@@ -1366,6 +1299,8 @@ class WalletConnectService extends ChangeNotifier {
         success: true,
         summary: result,
         chainId: request.chainId,
+        requestId: request.requestId,
+        result: result,
       );
       notifyListeners();
     } catch (error, stackTrace) {
@@ -1387,6 +1322,8 @@ class WalletConnectService extends ChangeNotifier {
         success: false,
         summary: wrappedError.message,
         chainId: request.chainId,
+        requestId: request.requestId,
+        error: wrappedError.message,
       );
       notifyListeners();
       throw wrappedError;

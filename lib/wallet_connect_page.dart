@@ -285,9 +285,22 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
     }
 
     final theme = Theme.of(context);
-    final statusLabel = activity.success ? 'Success' : 'Error';
-    final statusColor =
-        activity.success ? theme.colorScheme.primary : theme.colorScheme.error;
+    late final String statusLabel;
+    late final Color statusColor;
+    switch (activity.status) {
+      case WalletConnectRequestStatus.approved:
+        statusLabel = 'Success';
+        statusColor = theme.colorScheme.primary;
+        break;
+      case WalletConnectRequestStatus.rejected:
+        statusLabel = 'Error';
+        statusColor = theme.colorScheme.error;
+        break;
+      case WalletConnectRequestStatus.pending:
+        statusLabel = 'Pending';
+        statusColor = theme.colorScheme.tertiary;
+        break;
+    }
 
     return _buildSectionCard(
       context,
@@ -307,6 +320,11 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
           const SizedBox(height: 4),
           Text(activity.summary),
         ],
+        const SizedBox(height: 8),
+        Text(
+          'Updated: ${activity.timestamp.toLocal()}',
+          style: theme.textTheme.bodySmall,
+        ),
       ],
     );
   }
