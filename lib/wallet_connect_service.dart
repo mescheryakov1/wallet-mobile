@@ -478,17 +478,8 @@ class WalletConnectService extends ChangeNotifier {
 
     session.namespaces.forEach((_, namespace) {
       accounts.addAll(namespace.accounts);
-      final namespaceChains = namespace.chains;
-      if (namespaceChains != null && namespaceChains.isNotEmpty) {
-        chainIds.addAll(namespaceChains);
-      } else {
-        for (final account in namespace.accounts) {
-          final chain = _chainFromAccount(account);
-          if (chain != null) {
-            chainIds.add(chain);
-          }
-        }
-      }
+      final namespaceChains = _extractChainsFromNamespace(namespace);
+      chainIds.addAll(namespaceChains);
     });
 
     return WalletSessionInfo(
@@ -841,6 +832,21 @@ class WalletConnectService extends ChangeNotifier {
       return value;
     }
     return '${value.substring(0, 12)}…';
+  }
+
+  List<String> _extractChainsFromNamespace(Namespace namespace) {
+    final accounts = namespace.accounts;
+    if (accounts.isEmpty) {
+      return const <String>[];
+    }
+    final chains = <String>{};
+    for (final account in accounts) {
+      final chain = _chainFromAccount(account);
+      if (chain != null) {
+        chains.add(chain);
+      }
+    }
+    return chains.toList(growable: false);
   }
 
   String? _chainFromAccount(String account) {
