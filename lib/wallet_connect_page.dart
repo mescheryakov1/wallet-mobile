@@ -19,6 +19,8 @@ class WalletConnectPage extends StatefulWidget {
 class _WalletConnectPageState extends State<WalletConnectPage> {
   late final WalletConnectService service;
   late final TextEditingController uriController;
+  bool _isReviewRouteActive = false;
+  int? _lastOpenedRequestId;
 
   @override
   void initState() {
@@ -32,7 +34,58 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
   void _handleServiceUpdate() {
     if (mounted) {
       setState(() {});
+      _maybeOpenReview();
     }
+  }
+
+  void _maybeOpenReview() {
+    final pending = service.pendingRequest;
+    if (pending != null && !_isReviewRouteActive) {
+      if (_lastOpenedRequestId == pending.requestId) {
+        return;
+      }
+      _lastOpenedRequestId = pending.requestId;
+      _isReviewRouteActive = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        _openReviewRoute();
+      });
+    } else if (pending == null && !_isReviewRouteActive) {
+      _lastOpenedRequestId = null;
+    }
+  }
+
+  void _openReviewRoute() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => WcRequestApprovalPage(
+          service: service,
+        ),
+      ),
+    ).whenComplete(() {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isReviewRouteActive = false;
+        if (service.pendingRequest == null) {
+          _lastOpenedRequestId = null;
+        }
+      });
+    });
+  }
+
+  Future<void> _openReviewManually() async {
+    final pending = service.pendingRequest;
+    if (pending == null || _isReviewRouteActive) {
+      return;
+    }
+    _isReviewRouteActive = true;
+    _lastOpenedRequestId = pending.requestId;
+    _openReviewRoute();
   }
 
   @override
@@ -131,16 +184,7 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
             if (service.pendingRequest != null) ...[
               const SizedBox(height: 8),
               ElevatedButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => WcRequestApprovalPage(
-                        service: service,
-                      ),
-                    ),
-                  );
-                },
+                onPressed: _openReviewManually,
                 child: const Text('Review request'),
               ),
             ],

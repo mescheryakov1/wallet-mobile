@@ -614,8 +614,12 @@ class WalletConnectService extends ChangeNotifier {
   void _cancelPendingCompleterIfActive() {
     if (_pendingRequestCompleter != null) {
       if (!_pendingRequestCompleter!.isCompleted) {
-        _pendingRequestCompleter!
-            .completeError(Errors.getSdkError(Errors.USER_REJECTED_SIGN));
+        _pendingRequestCompleter!.completeError(
+          WalletConnectError(
+            code: 4001,
+            message: 'User rejected the request',
+          ),
+        );
       }
       _pendingRequestCompleter = null;
     }
@@ -632,11 +636,16 @@ class WalletConnectService extends ChangeNotifier {
     }
 
     if (!completer.isCompleted) {
-      completer.completeError(Errors.getSdkError(Errors.USER_REJECTED_SIGN));
+      completer.completeError(
+        WalletConnectError(
+          code: 4001,
+          message: 'User rejected the request',
+        ),
+      );
     }
     _lastRequestDebug =
         'rejected ${request.method} id=${request.requestId} via completer';
-    _lastErrorDebug = 'USER_REJECTED_SIGN';
+    _lastErrorDebug = 'error 4001: User rejected the request';
     _pendingRequestCompleter = null;
     _clearPendingRequest();
   }
