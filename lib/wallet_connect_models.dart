@@ -1,7 +1,14 @@
 import 'package:flutter/foundation.dart';
 
 /// Represents the status of a WalletConnect JSON-RPC request.
-enum WalletConnectRequestStatus { pending, approved, rejected }
+enum WalletConnectRequestStatus {
+  pending,
+  broadcasting,
+  approved,
+  rejected,
+  done,
+  error,
+}
 
 /// Basic metadata describing the connected dApp.
 @immutable
@@ -223,6 +230,7 @@ class WalletConnectRequestLogEntry {
     this.error,
     this.isDismissed = false,
     DateTime? timestamp,
+    this.txHash,
   }) : timestamp = timestamp ?? DateTime.now();
 
   final WalletConnectPendingRequest request;
@@ -231,6 +239,7 @@ class WalletConnectRequestLogEntry {
   final String? error;
   final DateTime timestamp;
   final bool isDismissed;
+  final String? txHash;
 
   WalletConnectRequestLogEntry copyWith({
     WalletConnectRequestStatus? status,
@@ -238,6 +247,7 @@ class WalletConnectRequestLogEntry {
     String? error,
     DateTime? timestamp,
     bool? isDismissed,
+    String? txHash,
   }) {
     return WalletConnectRequestLogEntry(
       request: request,
@@ -246,6 +256,7 @@ class WalletConnectRequestLogEntry {
       error: error ?? this.error,
       timestamp: timestamp ?? this.timestamp,
       isDismissed: isDismissed ?? this.isDismissed,
+      txHash: txHash ?? this.txHash,
     );
   }
 }
@@ -269,7 +280,8 @@ class WalletConnectRequestQueue extends ChangeNotifier {
 
   bool hasPending() {
     for (final WalletConnectRequestLogEntry entry in _entries) {
-      if (entry.status == WalletConnectRequestStatus.pending) {
+      if (entry.status == WalletConnectRequestStatus.pending ||
+          entry.status == WalletConnectRequestStatus.broadcasting) {
         return true;
       }
     }
@@ -294,8 +306,12 @@ class WalletConnectRequestQueue extends ChangeNotifier {
       final int index = _entries.indexOf(existing);
       final bool preserveDismissed = existing.isDismissed &&
           entry.status == WalletConnectRequestStatus.pending;
+      final bool nextDismissed = preserveDismissed
+          ? true
+          : (existing.isDismissed || entry.isDismissed);
       _entries[index] = entry.copyWith(
-        isDismissed: preserveDismissed,
+        isDismissed: nextDismissed,
+        txHash: entry.txHash ?? existing.txHash,
       );
     }
     notifyListeners();

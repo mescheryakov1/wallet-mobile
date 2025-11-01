@@ -61,6 +61,8 @@ class _WalletConnectRequestPopupState
     final String method = request.method;
     final String chainLabel = request.chainId ?? 'unknown chain';
     final ThemeData theme = Theme.of(context);
+    final bool isPending =
+        widget.entry.status == WalletConnectRequestStatus.pending;
 
     return Positioned.fill(
       child: Material(
@@ -120,12 +122,14 @@ class _WalletConnectRequestPopupState
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
                         TextButton(
-                          onPressed: _isProcessing ? null : _handleReject,
+                          onPressed:
+                              _isProcessing || !isPending ? null : _handleReject,
                           child: const Text('Reject'),
                         ),
                         const SizedBox(width: 12),
                         FilledButton(
-                          onPressed: _isProcessing ? null : _handleApprove,
+                          onPressed:
+                              _isProcessing || !isPending ? null : _handleApprove,
                           child: const Text('Approve'),
                         ),
                       ],

@@ -288,17 +288,26 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
     late final String statusLabel;
     late final Color statusColor;
     switch (activity.status) {
-      case WalletConnectRequestStatus.approved:
-        statusLabel = 'Success';
-        statusColor = theme.colorScheme.primary;
-        break;
-      case WalletConnectRequestStatus.rejected:
-        statusLabel = 'Error';
-        statusColor = theme.colorScheme.error;
-        break;
       case WalletConnectRequestStatus.pending:
         statusLabel = 'Pending';
         statusColor = theme.colorScheme.tertiary;
+        break;
+      case WalletConnectRequestStatus.broadcasting:
+        statusLabel = 'Processing';
+        statusColor = theme.colorScheme.primary;
+        break;
+      case WalletConnectRequestStatus.approved:
+      case WalletConnectRequestStatus.done:
+        statusLabel = 'Success';
+        statusColor = theme.colorScheme.primary;
+        break;
+      case WalletConnectRequestStatus.error:
+        statusLabel = 'Error';
+        statusColor = theme.colorScheme.error;
+        break;
+      case WalletConnectRequestStatus.rejected:
+        statusLabel = 'Rejected';
+        statusColor = theme.colorScheme.error;
         break;
     }
 

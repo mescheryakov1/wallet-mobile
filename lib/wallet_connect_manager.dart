@@ -99,6 +99,11 @@ class WalletConnectManager extends ChangeNotifier {
       error: event.error,
       timestamp: event.timestamp,
       isDismissed: existing?.isDismissed ?? false,
+      txHash: event.request.method == 'eth_sendTransaction' &&
+              (event.status == WalletConnectRequestStatus.done ||
+                  event.status == WalletConnectRequestStatus.approved)
+          ? event.result
+          : existing?.txHash,
     );
     requestQueue.addOrUpdate(entry);
     notifyListeners();

@@ -604,16 +604,13 @@ class WalletConnectService extends ChangeNotifier {
 
   void _recordActivity({
     required String method,
-    required bool success,
+    required WalletConnectRequestStatus status,
     required String summary,
     String? chainId,
     int? requestId,
     String? result,
     String? error,
   }) {
-    final status = success
-        ? WalletConnectRequestStatus.approved
-        : WalletConnectRequestStatus.rejected;
     _lastActivityEntry = WalletConnectActivityEntry(
       requestId: requestId,
       method: method,
@@ -1138,7 +1135,7 @@ class WalletConnectService extends ChangeNotifier {
       );
       _recordActivity(
         method: 'personal_sign',
-        success: false,
+        status: WalletConnectRequestStatus.rejected,
         summary: error.message,
         chainId: extraction.chainId,
         requestId: request.requestId,
@@ -1200,7 +1197,7 @@ class WalletConnectService extends ChangeNotifier {
       );
       _recordActivity(
         method: 'eth_sendTransaction',
-        success: false,
+        status: WalletConnectRequestStatus.rejected,
         summary: error.message,
         chainId: extraction.chainId,
         requestId: request.requestId,
@@ -1290,7 +1287,7 @@ class WalletConnectService extends ChangeNotifier {
     );
     _recordActivity(
       method: request.method,
-      success: false,
+      status: WalletConnectRequestStatus.rejected,
       summary: message,
       chainId: request.chainId,
       requestId: request.requestId,
@@ -1320,6 +1317,18 @@ class WalletConnectService extends ChangeNotifier {
     }
     _processingRequestIds.add(requestId);
 
+    _emitRequestEvent(
+      status: WalletConnectRequestStatus.broadcasting,
+      request: request,
+    );
+    _recordActivity(
+      method: request.method,
+      status: WalletConnectRequestStatus.broadcasting,
+      summary: 'Processing request…',
+      chainId: request.chainId,
+      requestId: request.requestId,
+    );
+
     try {
       final result = await _resolvePendingRequest(request);
       if (!completer.isCompleted) {
@@ -1329,13 +1338,13 @@ class WalletConnectService extends ChangeNotifier {
           'approved ${request.method} id=${request.requestId} result=${_summarizeResult(result)}';
       _lastErrorDebug = '';
       _emitRequestEvent(
-        status: WalletConnectRequestStatus.approved,
+        status: WalletConnectRequestStatus.done,
         request: request,
         result: result,
       );
       _recordActivity(
         method: request.method,
-        success: true,
+        status: WalletConnectRequestStatus.done,
         summary: result,
         chainId: request.chainId,
         requestId: request.requestId,
@@ -1354,13 +1363,13 @@ class WalletConnectService extends ChangeNotifier {
       }
       _lastErrorDebug = 'approve failed: ${wrappedError.message}';
       _emitRequestEvent(
-        status: WalletConnectRequestStatus.rejected,
+        status: WalletConnectRequestStatus.error,
         request: request,
         error: wrappedError.message,
       );
       _recordActivity(
         method: request.method,
-        success: false,
+        status: WalletConnectRequestStatus.error,
         summary: wrappedError.message,
         chainId: request.chainId,
         requestId: request.requestId,

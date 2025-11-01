@@ -171,6 +171,8 @@ class _WalletConnectRequestBanner extends StatelessWidget {
     final chainLabel = entry.request.chainId ?? 'unknown chain';
     final subtitle = '$method • $chainLabel';
     final List<Widget> details = _buildDetails(theme);
+    final bool isPending =
+        entry.status == WalletConnectRequestStatus.pending;
 
     return SafeArea(
       child: Align(
@@ -228,7 +230,7 @@ class _WalletConnectRequestBanner extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
                         TextButton(
-                          onPressed: isProcessing
+                          onPressed: isProcessing || !isPending
                               ? null
                               : () {
                                   unawaited(onReject());
@@ -237,7 +239,7 @@ class _WalletConnectRequestBanner extends StatelessWidget {
                         ),
                         const SizedBox(width: 8),
                         ElevatedButton(
-                          onPressed: isProcessing
+                          onPressed: isProcessing || !isPending
                               ? null
                               : () {
                                   unawaited(onApprove());

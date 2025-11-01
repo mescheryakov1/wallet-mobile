@@ -50,14 +50,19 @@ class _ActivityTile extends StatelessWidget {
     final ThemeData theme = Theme.of(context);
     final Color statusColor;
     switch (entry.status) {
-      case WalletConnectRequestStatus.approved:
-        statusColor = Colors.green;
-        break;
-      case WalletConnectRequestStatus.rejected:
-        statusColor = Colors.red;
-        break;
       case WalletConnectRequestStatus.pending:
         statusColor = theme.colorScheme.primary;
+        break;
+      case WalletConnectRequestStatus.broadcasting:
+        statusColor = theme.colorScheme.primary;
+        break;
+      case WalletConnectRequestStatus.approved:
+      case WalletConnectRequestStatus.done:
+        statusColor = Colors.green;
+        break;
+      case WalletConnectRequestStatus.error:
+      case WalletConnectRequestStatus.rejected:
+        statusColor = Colors.red;
         break;
     }
     final bool isPending = entry.status == WalletConnectRequestStatus.pending;
@@ -101,6 +106,10 @@ class _ActivityTile extends StatelessWidget {
             if (entry.result != null) ...[
               const SizedBox(height: 4),
               Text('Result: ${entry.result}'),
+            ],
+            if (entry.txHash != null) ...[
+              const SizedBox(height: 4),
+              Text('Tx hash: ${entry.txHash}'),
             ],
             if (entry.error != null) ...[
               const SizedBox(height: 4),
