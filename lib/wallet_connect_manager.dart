@@ -58,19 +58,25 @@ class WalletConnectManager extends ChangeNotifier {
   bool get hasPendingRequests => requestQueue.hasPending();
 
   Future<void> approveRequest(int requestId) async {
-    final WalletConnectPendingRequest? pending = service.pendingRequest;
-    if (pending == null || pending.requestId != requestId) {
-      throw StateError('Request $requestId is no longer pending');
+    final WalletConnectRequestLogEntry? entry = requestQueue.findById(requestId);
+    if (entry == null) {
+      throw StateError('Request $requestId not found');
     }
-    await service.approvePendingRequest();
+    if (entry.status != WalletConnectRequestStatus.pending) {
+      return;
+    }
+    await service.approvePendingRequest(requestId);
   }
 
   Future<void> rejectRequest(int requestId) async {
-    final WalletConnectPendingRequest? pending = service.pendingRequest;
-    if (pending == null || pending.requestId != requestId) {
-      throw StateError('Request $requestId is no longer pending');
+    final WalletConnectRequestLogEntry? entry = requestQueue.findById(requestId);
+    if (entry == null) {
+      throw StateError('Request $requestId not found');
     }
-    await service.rejectPendingRequest();
+    if (entry.status != WalletConnectRequestStatus.pending) {
+      return;
+    }
+    await service.rejectPendingRequest(requestId);
   }
 
   void dismissRequest(int requestId) {

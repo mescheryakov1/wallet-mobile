@@ -291,6 +291,11 @@ class _WalletHomePageState extends State<WalletHomePage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Request approved')),
       );
+    } on StateError catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Request is no longer pending')),
+      );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -305,6 +310,11 @@ class _WalletHomePageState extends State<WalletHomePage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Request rejected')),
+      );
+    } on StateError catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Request is no longer pending')),
       );
     } catch (error) {
       if (!mounted) return;

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -98,6 +99,9 @@ class WalletConnectService extends ChangeNotifier {
   WalletConnectPendingRequest? _pendingRequest;
   Completer<String>? _pendingRequestCompleter;
   WalletConnectActivityEntry? _lastActivityEntry;
+  final Set<int> _processingRequestIds = <int>{};
+  final Set<int> _handledRequestIds = <int>{};
+  final ListQueue<int> _handledRequestOrder = ListQueue<int>();
   bool _walletListenerAttached = false;
   final StreamController<WalletConnectRequestEvent>
       _requestEventsController =
@@ -535,6 +539,18 @@ class WalletConnectService extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  void _markRequestHandled(int requestId) {
+    if (_handledRequestIds.add(requestId)) {
+      _handledRequestOrder.addLast(requestId);
+      if (_handledRequestOrder.length > 50) {
+        final int oldest = _handledRequestOrder.removeFirst();
+        _handledRequestIds.remove(oldest);
+      }
+    }
+  }
+
+  bool _isRequestHandled(int requestId) => _handledRequestIds.contains(requestId);
 
   Future<void> _loadPersistedSessions() async {
     try {
@@ -1128,6 +1144,7 @@ class WalletConnectService extends ChangeNotifier {
         requestId: request.requestId,
         error: error.message,
       );
+      _markRequestHandled(request.requestId);
       notifyListeners();
       throw error;
     }
@@ -1144,24 +1161,7 @@ class WalletConnectService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final result = await _pendingRequestCompleter!.future;
-      _lastRequestDebug =
-          'personal_sign approved result=${_summarizeResult(result)}';
-      _emitRequestEvent(
-        status: WalletConnectRequestStatus.approved,
-        request: request,
-        result: result,
-      );
-      _recordActivity(
-        method: 'personal_sign',
-        success: true,
-        summary: result,
-        chainId: extraction.chainId,
-        requestId: request.requestId,
-        result: result,
-      );
-      notifyListeners();
-      return result;
+      return await _pendingRequestCompleter!.future;
     } finally {
       _pendingRequestCompleter = null;
     }
@@ -1206,6 +1206,7 @@ class WalletConnectService extends ChangeNotifier {
         requestId: request.requestId,
         error: error.message,
       );
+      _markRequestHandled(request.requestId);
       notifyListeners();
       throw error;
     }
@@ -1222,59 +1223,16 @@ class WalletConnectService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final result = await _pendingRequestCompleter!.future;
-      _lastRequestDebug =
-          'eth_sendTransaction approved result=${_summarizeResult(result)}';
-      _emitRequestEvent(
-        status: WalletConnectRequestStatus.approved,
-        request: request,
-        result: result,
-      );
-      _recordActivity(
-        method: 'eth_sendTransaction',
-        success: true,
-        summary: result,
-        chainId: extraction.chainId,
-        requestId: request.requestId,
-        result: result,
-      );
-      notifyListeners();
-      return result;
+      return await _pendingRequestCompleter!.future;
     } finally {
       _pendingRequestCompleter = null;
     }
   }
 
   void _cancelPendingCompleterIfActive() {
-    if (_pendingRequestCompleter != null) {
-      if (!_pendingRequestCompleter!.isCompleted) {
-        _pendingRequestCompleter!.completeError(
-          WalletConnectError(
-            code: 4001,
-            message: 'User rejected the request.',
-          ),
-        );
-      }
-      _pendingRequestCompleter = null;
-    }
-    if (_pendingRequest != null) {
-      _emitRequestEvent(
-        status: WalletConnectRequestStatus.rejected,
-        request: _pendingRequest!,
-        error: 'Request superseded by a new call.',
-      );
-      _clearPendingRequest();
-    }
-  }
-
-  Future<void> rejectPendingRequest() async {
     final completer = _pendingRequestCompleter;
-    final request = _pendingRequest;
-    if (completer == null || request == null) {
-      return;
-    }
-
-    if (!completer.isCompleted) {
+    final WalletConnectPendingRequest? request = _pendingRequest;
+    if (completer != null && !completer.isCompleted) {
       completer.completeError(
         WalletConnectError(
           code: 4001,
@@ -1282,32 +1240,85 @@ class WalletConnectService extends ChangeNotifier {
         ),
       );
     }
+    _pendingRequestCompleter = null;
+    if (request != null) {
+      _processingRequestIds.remove(request.requestId);
+      _markRequestHandled(request.requestId);
+      _emitRequestEvent(
+        status: WalletConnectRequestStatus.rejected,
+        request: request,
+        error: 'Request superseded by a new call.',
+      );
+      _clearPendingRequest();
+    }
+  }
+
+  Future<void> rejectPendingRequest(int requestId, {String? reason}) async {
+    if (_isRequestHandled(requestId)) {
+      return;
+    }
+    final WalletConnectPendingRequest? request = _pendingRequest;
+    final Completer<String>? completer = _pendingRequestCompleter;
+    if (request == null || request.requestId != requestId || completer == null) {
+      if (_processingRequestIds.contains(requestId)) {
+        return;
+      }
+      throw StateError('Request $requestId is not currently pending');
+    }
+
+    if (_processingRequestIds.contains(requestId)) {
+      return;
+    }
+    _processingRequestIds.add(requestId);
+
+    final String message = reason ?? 'User rejected the request.';
+    if (!completer.isCompleted) {
+      completer.completeError(
+        WalletConnectError(
+          code: 4001,
+          message: message,
+        ),
+      );
+    }
     _lastRequestDebug =
         'rejected ${request.method} id=${request.requestId} via completer';
-    _lastErrorDebug = 'error 4001: User rejected the request.';
+    _lastErrorDebug = 'error 4001: $message';
     _emitRequestEvent(
       status: WalletConnectRequestStatus.rejected,
       request: request,
-      error: 'User rejected the request.',
+      error: message,
     );
     _recordActivity(
       method: request.method,
       success: false,
-      summary: 'User rejected the request.',
+      summary: message,
       chainId: request.chainId,
       requestId: request.requestId,
-      error: 'User rejected the request.',
+      error: message,
     );
+    _markRequestHandled(requestId);
     _pendingRequestCompleter = null;
+    _processingRequestIds.remove(requestId);
     _clearPendingRequest();
   }
 
-  Future<void> approvePendingRequest() async {
-    final completer = _pendingRequestCompleter;
-    final request = _pendingRequest;
-    if (completer == null || request == null) {
+  Future<void> approvePendingRequest(int requestId) async {
+    if (_isRequestHandled(requestId)) {
       return;
     }
+    final WalletConnectPendingRequest? request = _pendingRequest;
+    final Completer<String>? completer = _pendingRequestCompleter;
+    if (request == null || request.requestId != requestId || completer == null) {
+      if (_processingRequestIds.contains(requestId)) {
+        return;
+      }
+      throw StateError('Request $requestId is not currently pending');
+    }
+
+    if (_processingRequestIds.contains(requestId)) {
+      return;
+    }
+    _processingRequestIds.add(requestId);
 
     try {
       final result = await _resolvePendingRequest(request);
@@ -1330,12 +1341,14 @@ class WalletConnectService extends ChangeNotifier {
         requestId: request.requestId,
         result: result,
       );
+      _markRequestHandled(requestId);
       notifyListeners();
     } catch (error, stackTrace) {
       debugPrint('WalletConnect approve error: $error\n$stackTrace');
-      final wrappedError = error is WalletConnectRequestException
-          ? error
-          : WalletConnectRequestException('$error');
+      final WalletConnectRequestException wrappedError =
+          error is WalletConnectRequestException
+              ? error
+              : WalletConnectRequestException('$error');
       if (!completer.isCompleted) {
         completer.completeError(wrappedError);
       }
@@ -1353,10 +1366,12 @@ class WalletConnectService extends ChangeNotifier {
         requestId: request.requestId,
         error: wrappedError.message,
       );
+      _markRequestHandled(requestId);
       notifyListeners();
       throw wrappedError;
     } finally {
       _pendingRequestCompleter = null;
+      _processingRequestIds.remove(requestId);
       _clearPendingRequest();
     }
   }
