@@ -1,10 +1,11 @@
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:web3dart/web3dart.dart';
 
 import 'network_config.dart';
 
-abstract class LocalWalletApi {
+abstract class LocalWalletApi extends ChangeNotifier {
   EthereumAddress? getAddress();
   int? getChainId();
   Future<String?> signMessage(Uint8List messageBytes);
