@@ -4,34 +4,39 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:web3dart/web3dart.dart';
 
-import 'wallet_connect_service.dart';
+import 'wallet_connect_manager.dart';
+import 'wallet_connect_models.dart';
 
 class WcRequestApprovalPage extends StatefulWidget {
   const WcRequestApprovalPage({
-    required this.service,
+    required this.requestId,
+    WalletConnectManager? manager,
     super.key,
-  });
+  }) : manager = manager ?? WalletConnectManager.instance;
 
-  final WalletConnectService service;
+  final int requestId;
+  final WalletConnectManager manager;
 
   @override
   State<WcRequestApprovalPage> createState() => _WcRequestApprovalPageState();
 }
 
 class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
-  late final WalletConnectService _service;
+  late final WalletConnectManager _manager;
   bool _isProcessing = false;
 
   @override
   void initState() {
     super.initState();
-    _service = widget.service
-      ..addListener(_handleServiceUpdate);
+    _manager = widget.manager;
+    _manager.addListener(_handleServiceUpdate);
+    _manager.requestQueue.addListener(_handleServiceUpdate);
   }
 
   @override
   void dispose() {
-    _service.removeListener(_handleServiceUpdate);
+    _manager.requestQueue.removeListener(_handleServiceUpdate);
+    _manager.removeListener(_handleServiceUpdate);
     super.dispose();
   }
 
@@ -41,7 +46,16 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
     }
   }
 
-  PendingWcRequest? get _request => _service.pendingRequest;
+  WalletConnectPendingRequest? get _pendingRequest {
+    final pending = _manager.pendingRequest;
+    if (pending != null && pending.requestId == widget.requestId) {
+      return pending;
+    }
+    return null;
+  }
+
+  WalletConnectRequestLogEntry? get _logEntry =>
+      _manager.requestQueue.findById(widget.requestId);
 
   Future<void> _approve() async {
     if (_isProcessing) {
@@ -53,7 +67,7 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
     });
 
     try {
-      await _service.approvePendingRequest();
+      await _manager.approveRequest(widget.requestId);
       if (!mounted) {
         return;
       }
@@ -87,7 +101,7 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
     });
 
     try {
-      await _service.rejectPendingRequest();
+      await _manager.rejectRequest(widget.requestId);
       if (!mounted) {
         return;
       }
@@ -113,7 +127,8 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
 
   @override
   Widget build(BuildContext context) {
-    final request = _request;
+    final entry = _logEntry;
+    final request = _pendingRequest ?? entry?.request;
     return Scaffold(
       appBar: AppBar(
         title: const Text('WalletConnect request'),
@@ -139,6 +154,15 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
                                 .titleLarge
                                 ?.copyWith(fontWeight: FontWeight.bold),
                           ),
+                          const SizedBox(height: 8),
+                          if (entry != null)
+                            Text(
+                              'Status: ${entry.status.name}',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(fontWeight: FontWeight.w500),
+                            ),
                           const SizedBox(height: 12),
                           ..._buildRequestDetails(request),
                         ],
@@ -150,14 +174,22 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
                     children: [
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: _isProcessing ? null : _reject,
+                          onPressed: _isProcessing ||
+                                  entry?.status !=
+                                      WalletConnectRequestStatus.pending
+                              ? null
+                              : _reject,
                           child: const Text('Reject'),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: _isProcessing ? null : _approve,
+                          onPressed: _isProcessing ||
+                                  entry?.status !=
+                                      WalletConnectRequestStatus.pending
+                              ? null
+                              : _approve,
                           child: _isProcessing
                               ? const SizedBox(
                                   height: 20,
@@ -175,7 +207,7 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
     );
   }
 
-  List<Widget> _buildRequestDetails(PendingWcRequest request) {
+  List<Widget> _buildRequestDetails(WalletConnectPendingRequest request) {
     switch (request.method) {
       case 'personal_sign':
         return _buildPersonalSignDetails(request);
@@ -190,7 +222,7 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
     }
   }
 
-  List<Widget> _buildPersonalSignDetails(PendingWcRequest request) {
+  List<Widget> _buildPersonalSignDetails(WalletConnectPendingRequest request) {
     final params = _asList(request.params);
     final address = _resolveAddress(params);
     final messageRaw = _resolveMessage(params);
@@ -239,7 +271,9 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
     ];
   }
 
-  List<Widget> _buildEthSendTransactionDetails(PendingWcRequest request) {
+  List<Widget> _buildEthSendTransactionDetails(
+    WalletConnectPendingRequest request,
+  ) {
     final params = _asList(request.params);
     Map<String, dynamic>? transaction;
     if (params.isNotEmpty && params.first is Map) {

@@ -1,103 +1,52 @@
 import 'package:flutter/material.dart';
 
-import 'main.dart' show WalletController;
 import 'network_config.dart';
+import 'wallet_connect_manager.dart';
+import 'wallet_connect_models.dart';
 import 'wallet_connect_pair_page.dart';
-import 'wallet_connect_service.dart';
 import 'wc_request_approval_page.dart';
 
 class WalletConnectPage extends StatefulWidget {
-  const WalletConnectPage({
-    required this.walletController,
-    super.key,
-  });
-
-  final WalletController walletController;
+  const WalletConnectPage({super.key});
 
   @override
   State<WalletConnectPage> createState() => _WalletConnectPageState();
 }
 
 class _WalletConnectPageState extends State<WalletConnectPage> {
-  late final WalletConnectService service;
-  bool _isReviewRouteActive = false;
-  int? _lastOpenedRequestId;
+  late final WalletConnectManager _manager;
 
   @override
   void initState() {
     super.initState();
-    service = WalletConnectService(walletApi: widget.walletController)
-      ..addListener(_handleServiceUpdate);
-    service.init();
+    _manager = WalletConnectManager.instance;
+    _manager.addListener(_handleManagerUpdate);
   }
 
   @override
   void dispose() {
-    service.removeListener(_handleServiceUpdate);
-    service.dispose();
+    _manager.removeListener(_handleManagerUpdate);
     super.dispose();
   }
 
-  void _handleServiceUpdate() {
-    if (!mounted) {
-      return;
+  void _handleManagerUpdate() {
+    if (mounted) {
+      setState(() {});
     }
-    setState(() {});
-    _maybeOpenReview();
-  }
-
-  void _maybeOpenReview() {
-    final pending = service.pendingRequest;
-    if (pending != null && !_isReviewRouteActive) {
-      if (_lastOpenedRequestId == pending.requestId) {
-        return;
-      }
-      _lastOpenedRequestId = pending.requestId;
-      _isReviewRouteActive = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) {
-          return;
-        }
-        _openReviewRoute();
-      });
-    } else if (pending == null && !_isReviewRouteActive) {
-      _lastOpenedRequestId = null;
-    }
-  }
-
-  void _openReviewRoute() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => WcRequestApprovalPage(
-          service: service,
-        ),
-      ),
-    ).whenComplete(() {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _isReviewRouteActive = false;
-        if (service.pendingRequest == null) {
-          _lastOpenedRequestId = null;
-        }
-      });
-    });
   }
 
   void _openPairScreen() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => WalletConnectPairPage(service: service),
+        builder: (_) => WalletConnectPairPage(service: _manager.service),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final session = service.primarySessionInfo;
+    final session = _manager.service.primarySessionInfo;
     return Scaffold(
       appBar: AppBar(
         title: const Text('WalletConnect v2'),
@@ -132,10 +81,13 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
   }
 
   Widget _buildConnectedBody(BuildContext context, WalletSessionInfo session) {
+    final service = _manager.service;
     final peer = service.currentPeerMetadata;
     final chains = service.getApprovedChains();
     final methods = service.getApprovedMethods();
     final activity = service.lastActivityEntry;
+    final WalletConnectRequestLogEntry? pendingLog =
+        _manager.firstPendingLog;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -144,6 +96,27 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
         _buildPermissionsSection(context, chains, methods),
         const SizedBox(height: 16),
         _buildActivitySection(context, activity),
+        if (pendingLog != null &&
+            pendingLog.status == WalletConnectRequestStatus.pending) ...[
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => WcRequestApprovalPage(
+                      requestId: pendingLog.request.requestId,
+                      manager: _manager,
+                    ),
+                    fullscreenDialog: true,
+                  ),
+                );
+              },
+              child: const Text('Review pending request'),
+            ),
+          ),
+        ],
         const SizedBox(height: 24),
         SizedBox(
           width: double.infinity,

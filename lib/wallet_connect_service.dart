@@ -8,6 +8,7 @@ import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart';
 
 import 'local_wallet_api.dart';
 import 'network_config.dart';
+import 'wallet_connect_models.dart';
 
 const String _defaultWalletConnectProjectId =
     'ac79370327e3526ba018428bc44831f1';
@@ -133,22 +134,6 @@ class WalletConnectActivityEntry {
   final DateTime timestamp;
 }
 
-class PendingWcRequest {
-  PendingWcRequest({
-    required this.topic,
-    required this.requestId,
-    required this.method,
-    required this.params,
-    this.chainId,
-  });
-
-  final String topic;
-  final int requestId;
-  final String method;
-  final dynamic params;
-  final String? chainId;
-}
-
 class _RequestExtraction {
   const _RequestExtraction({
     required this.requestId,
@@ -210,14 +195,17 @@ class WalletConnectService extends ChangeNotifier {
   bool _handlersRegistered = false;
   String? _lastRequestDebug;
   String? _lastErrorDebug;
-  PendingWcRequest? _pendingRequest;
+  WalletConnectPendingRequest? _pendingRequest;
   Completer<String>? _pendingRequestCompleter;
   WalletConnectActivityEntry? _lastActivityEntry;
+  final StreamController<WalletConnectRequestEvent>
+      _requestEventsController =
+      StreamController<WalletConnectRequestEvent>.broadcast();
 
   String get status => _status;
   String? get lastRequestDebug => _lastRequestDebug;
   String? get lastErrorDebug => _lastErrorDebug;
-  PendingWcRequest? get pendingRequest => _pendingRequest;
+  WalletConnectPendingRequest? get pendingRequest => _pendingRequest;
   List<WalletSessionInfo> getActiveSessions() =>
       List<WalletSessionInfo>.unmodifiable(_sessionInfos);
   bool get isConnected => _sessionInfos.isNotEmpty;
@@ -253,6 +241,8 @@ class WalletConnectService extends ChangeNotifier {
   }
 
   WalletConnectActivityEntry? get lastActivityEntry => _lastActivityEntry;
+  Stream<WalletConnectRequestEvent> get requestEvents =>
+      _requestEventsController.stream;
 
   Future<void> init() async {
     await initWalletConnect();
@@ -683,6 +673,25 @@ class WalletConnectService extends ChangeNotifier {
     );
   }
 
+  void _emitRequestEvent({
+    required WalletConnectRequestStatus status,
+    required WalletConnectPendingRequest request,
+    String? result,
+    String? error,
+  }) {
+    if (_requestEventsController.isClosed) {
+      return;
+    }
+    _requestEventsController.add(
+      WalletConnectRequestEvent(
+        request: request,
+        status: status,
+        result: result,
+        error: error,
+      ),
+    );
+  }
+
   Future<void> pairUri(String uri) async {
     final client = _client;
     if (client == null) {
@@ -1052,6 +1061,9 @@ class WalletConnectService extends ChangeNotifier {
       client.onSessionConnect.unsubscribe(_onSessionConnect);
       client.onSessionDelete.unsubscribe(_onSessionDelete);
     }
+    if (!_requestEventsController.isClosed) {
+      _requestEventsController.close();
+    }
     super.dispose();
   }
 
@@ -1132,6 +1144,13 @@ class WalletConnectService extends ChangeNotifier {
 
     _pendingRequestCompleter = Completer<String>();
     final extraction = _extractRequestDetails(topic, 'personal_sign', params);
+    final request = WalletConnectPendingRequest(
+      topic: topic,
+      requestId: extraction.requestId,
+      method: 'personal_sign',
+      params: extraction.params,
+      chainId: extraction.chainId,
+    );
 
     try {
       _validateBeforePrompt(
@@ -1145,6 +1164,11 @@ class WalletConnectService extends ChangeNotifier {
       _lastRequestDebug =
           'auto-reject personal_sign on ${extraction.chainId ?? 'unknown chain'}: ${error.message}';
       _lastErrorDebug = 'auto reject ${error.code}: ${error.message}';
+      _emitRequestEvent(
+        status: WalletConnectRequestStatus.rejected,
+        request: request,
+        error: error.message,
+      );
       _recordActivity(
         method: 'personal_sign',
         success: false,
@@ -1159,12 +1183,10 @@ class WalletConnectService extends ChangeNotifier {
     _lastRequestDebug =
         'personal_sign chain=$chainLabel topic=$topic params=${extraction.params}';
     _lastErrorDebug = '';
-    _pendingRequest = PendingWcRequest(
-      topic: topic,
-      requestId: extraction.requestId,
-      method: 'personal_sign',
-      params: extraction.params,
-      chainId: extraction.chainId,
+    _pendingRequest = request;
+    _emitRequestEvent(
+      status: WalletConnectRequestStatus.pending,
+      request: request,
     );
     notifyListeners();
 
@@ -1172,6 +1194,11 @@ class WalletConnectService extends ChangeNotifier {
       final result = await _pendingRequestCompleter!.future;
       _lastRequestDebug =
           'personal_sign approved result=${_summarizeResult(result)}';
+      _emitRequestEvent(
+        status: WalletConnectRequestStatus.approved,
+        request: request,
+        result: result,
+      );
       _recordActivity(
         method: 'personal_sign',
         success: true,
@@ -1191,6 +1218,13 @@ class WalletConnectService extends ChangeNotifier {
     _pendingRequestCompleter = Completer<String>();
     final extraction =
         _extractRequestDetails(topic, 'eth_sendTransaction', params);
+    final request = WalletConnectPendingRequest(
+      topic: topic,
+      requestId: extraction.requestId,
+      method: 'eth_sendTransaction',
+      params: extraction.params,
+      chainId: extraction.chainId,
+    );
 
     try {
       _validateBeforePrompt(
@@ -1204,6 +1238,11 @@ class WalletConnectService extends ChangeNotifier {
       _lastRequestDebug =
           'auto-reject eth_sendTransaction on ${extraction.chainId ?? 'unknown chain'}: ${error.message}';
       _lastErrorDebug = 'auto reject ${error.code}: ${error.message}';
+      _emitRequestEvent(
+        status: WalletConnectRequestStatus.rejected,
+        request: request,
+        error: error.message,
+      );
       _recordActivity(
         method: 'eth_sendTransaction',
         success: false,
@@ -1218,12 +1257,10 @@ class WalletConnectService extends ChangeNotifier {
     _lastRequestDebug =
         'eth_sendTransaction chain=$chainLabel topic=$topic params=${extraction.params}';
     _lastErrorDebug = '';
-    _pendingRequest = PendingWcRequest(
-      topic: topic,
-      requestId: extraction.requestId,
-      method: 'eth_sendTransaction',
-      params: extraction.params,
-      chainId: extraction.chainId,
+    _pendingRequest = request;
+    _emitRequestEvent(
+      status: WalletConnectRequestStatus.pending,
+      request: request,
     );
     notifyListeners();
 
@@ -1231,6 +1268,11 @@ class WalletConnectService extends ChangeNotifier {
       final result = await _pendingRequestCompleter!.future;
       _lastRequestDebug =
           'eth_sendTransaction approved result=${_summarizeResult(result)}';
+      _emitRequestEvent(
+        status: WalletConnectRequestStatus.approved,
+        request: request,
+        result: result,
+      );
       _recordActivity(
         method: 'eth_sendTransaction',
         success: true,
@@ -1257,6 +1299,11 @@ class WalletConnectService extends ChangeNotifier {
       _pendingRequestCompleter = null;
     }
     if (_pendingRequest != null) {
+      _emitRequestEvent(
+        status: WalletConnectRequestStatus.rejected,
+        request: _pendingRequest!,
+        error: 'Request superseded by a new call.',
+      );
       _clearPendingRequest();
     }
   }
@@ -1279,6 +1326,11 @@ class WalletConnectService extends ChangeNotifier {
     _lastRequestDebug =
         'rejected ${request.method} id=${request.requestId} via completer';
     _lastErrorDebug = 'error 4001: User rejected the request.';
+    _emitRequestEvent(
+      status: WalletConnectRequestStatus.rejected,
+      request: request,
+      error: 'User rejected the request.',
+    );
     _recordActivity(
       method: request.method,
       success: false,
@@ -1304,6 +1356,11 @@ class WalletConnectService extends ChangeNotifier {
       _lastRequestDebug =
           'approved ${request.method} id=${request.requestId} result=${_summarizeResult(result)}';
       _lastErrorDebug = '';
+      _emitRequestEvent(
+        status: WalletConnectRequestStatus.approved,
+        request: request,
+        result: result,
+      );
       _recordActivity(
         method: request.method,
         success: true,
@@ -1320,6 +1377,11 @@ class WalletConnectService extends ChangeNotifier {
         completer.completeError(wrappedError);
       }
       _lastErrorDebug = 'approve failed: ${wrappedError.message}';
+      _emitRequestEvent(
+        status: WalletConnectRequestStatus.rejected,
+        request: request,
+        error: wrappedError.message,
+      );
       _recordActivity(
         method: request.method,
         success: false,
@@ -1334,7 +1396,7 @@ class WalletConnectService extends ChangeNotifier {
     }
   }
 
-  Future<String> _resolvePendingRequest(PendingWcRequest request) {
+  Future<String> _resolvePendingRequest(WalletConnectPendingRequest request) {
     switch (request.method) {
       case 'personal_sign':
         return _signPersonalMessage(request);
@@ -1347,7 +1409,7 @@ class WalletConnectService extends ChangeNotifier {
     }
   }
 
-  Future<String> _signPersonalMessage(PendingWcRequest request) async {
+  Future<String> _signPersonalMessage(WalletConnectPendingRequest request) async {
     final params = _asList(request.params);
     if (params.isEmpty) {
       throw WalletConnectRequestException('personal_sign params are empty');
@@ -1407,7 +1469,7 @@ class WalletConnectService extends ChangeNotifier {
   }
 
   Future<String> _sendAndBroadcastTransaction(
-    PendingWcRequest request,
+    WalletConnectPendingRequest request,
   ) async {
     final params = _asList(request.params);
     if (params.isEmpty || params.first is! Map) {

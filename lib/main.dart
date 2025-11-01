@@ -11,7 +11,10 @@ import 'package:web3dart/web3dart.dart';
 
 import 'local_wallet_api.dart';
 import 'network_config.dart';
+import 'wallet_connect_activity_screen.dart';
+import 'wallet_connect_manager.dart';
 import 'wallet_connect_page.dart';
+import 'wallet_connect_request_listener.dart';
 void main() {
   runApp(const WalletApp());
 }
@@ -28,6 +31,11 @@ class WalletApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
+      builder: (BuildContext context, Widget? child) {
+        return WalletConnectRequestListener(
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       home: const WalletHomePage(),
     );
   }
@@ -51,6 +59,11 @@ class _WalletHomePageState extends State<WalletHomePage> {
     _controller = WalletController();
     _controller.addListener(_handleControllerUpdate);
     unawaited(_controller.initialize());
+    unawaited(
+      WalletConnectManager.instance.initialize(
+        walletApi: _controller,
+      ),
+    );
   }
 
   void _handleControllerUpdate() {
@@ -117,9 +130,18 @@ class _WalletHomePageState extends State<WalletHomePage> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => WalletConnectPage(
-                    walletController: _controller,
-                  ),
+                  builder: (_) => const WalletConnectPage(),
+                ),
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'WalletConnect activity',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const WalletConnectActivityScreen(),
                 ),
               );
             },
