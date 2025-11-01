@@ -484,9 +484,10 @@ class WalletConnectService extends ChangeNotifier {
   }
 
   String _fakeSignatureHex() {
-    const String chunk = '11';
-    final String body = List<String>.filled(65, chunk).join();
-    return '0x$body';
+    final String r = List<String>.filled(32, '11').join();
+    final String s = List<String>.filled(32, '22').join();
+    const String v = '1b';
+    return '0x$r$s$v';
   }
 
   String _fakeTxHashHex() {
