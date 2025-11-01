@@ -694,6 +694,121 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
     return Future.value(null);
   }
 
+  @override
+  Future<String?> sendTransaction(Map<String, dynamic> transaction) async {
+    final currentWallet = wallet;
+    if (currentWallet == null) {
+      return null;
+    }
+
+    return _withClient((client) async {
+      final credentials = EthPrivateKey.fromHex(currentWallet.privateKey);
+      final toValue = transaction['to'];
+      EthereumAddress? to;
+      if (toValue is String && toValue.isNotEmpty) {
+        to = EthereumAddress.fromHex(toValue);
+      }
+
+      final valueQuantity = _parseQuantity(transaction['value']);
+      final gasQuantity = _parseQuantity(transaction['gas']);
+      final gasPriceQuantity = _parseQuantity(transaction['gasPrice']);
+      final maxFeePerGasQuantity = _parseQuantity(transaction['maxFeePerGas']);
+      final maxPriorityFeePerGasQuantity =
+          _parseQuantity(transaction['maxPriorityFeePerGas']);
+      final nonceQuantity = _parseQuantity(transaction['nonce']);
+
+      final dataValue = transaction['data'];
+      Uint8List? data;
+      if (dataValue is String && dataValue.isNotEmpty) {
+        data = _decodeHexData(dataValue);
+      }
+
+      final tx = Transaction(
+        from: currentWallet.address,
+        to: to,
+        value: valueQuantity != null ? EtherAmount.inWei(valueQuantity) : null,
+        gasPrice: gasPriceQuantity != null && maxFeePerGasQuantity == null
+            ? EtherAmount.inWei(gasPriceQuantity)
+            : null,
+        maxGas: _bigIntToInt(gasQuantity),
+        nonce: _bigIntToInt(nonceQuantity),
+        data: data,
+        maxFeePerGas: maxFeePerGasQuantity != null
+            ? EtherAmount.inWei(maxFeePerGasQuantity)
+            : null,
+        maxPriorityFeePerGas: maxPriorityFeePerGasQuantity != null
+            ? EtherAmount.inWei(maxPriorityFeePerGasQuantity)
+            : null,
+      );
+
+      final txHash = await client.sendTransaction(
+        credentials,
+        tx,
+        chainId: selectedNetwork.chainId,
+      );
+      return txHash;
+    });
+  }
+
+  BigInt? _parseQuantity(dynamic value) {
+    if (value == null) {
+      return null;
+    }
+    if (value is BigInt) {
+      return value;
+    }
+    if (value is int) {
+      return BigInt.from(value);
+    }
+    if (value is String) {
+      if (value.isEmpty) {
+        return null;
+      }
+      final cleaned = value.startsWith('0x') || value.startsWith('0X')
+          ? value.substring(2)
+          : value;
+      if (cleaned.isEmpty) {
+        return BigInt.zero;
+      }
+      final radix = value.startsWith('0x') || value.startsWith('0X') ? 16 : 10;
+      return BigInt.parse(cleaned, radix: radix);
+    }
+    throw ArgumentError('Unsupported quantity type: $value');
+  }
+
+  Uint8List _decodeHexData(String value) {
+    final cleaned = value.startsWith('0x') || value.startsWith('0X')
+        ? value.substring(2)
+        : value;
+    if (cleaned.isEmpty) {
+      return Uint8List(0);
+    }
+    if (cleaned.length.isOdd) {
+      throw const FormatException('Неверная hex-строка данных транзакции.');
+    }
+    final bytes = Uint8List(cleaned.length ~/ 2);
+    for (int i = 0; i < cleaned.length; i += 2) {
+      final segment = cleaned.substring(i, i + 2);
+      final value = int.tryParse(segment, radix: 16);
+      if (value == null) {
+        throw const FormatException('Неверная hex-строка данных транзакции.');
+      }
+      bytes[i ~/ 2] = value;
+    }
+    return bytes;
+  }
+
+  int? _bigIntToInt(BigInt? value) {
+    if (value == null) {
+      return null;
+    }
+    const maxInt = 0x7fffffffffffffff;
+    if (value.isNegative || value > BigInt.from(maxInt)) {
+      throw const FormatException('Недопустимое значение параметра транзакции.');
+    }
+    return value.toInt();
+  }
+
   String get formattedBalance {
     if (_balance == null) {
       return '—';

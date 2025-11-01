@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart';
@@ -20,6 +22,15 @@ class PendingWcRequest {
   final int requestId;
   final String method;
   final dynamic params;
+}
+
+class WalletConnectRequestException implements Exception {
+  WalletConnectRequestException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }
 
 class WalletConnectService extends ChangeNotifier {
@@ -395,7 +406,7 @@ class WalletConnectService extends ChangeNotifier {
     try {
       final result = await _pendingRequestCompleter!.future;
       _lastRequestDebug =
-          'personal_sign approved with result length=${result.length}';
+          'personal_sign approved result=${_summarizeResult(result)}';
       notifyListeners();
       return result;
     } finally {
@@ -416,7 +427,7 @@ class WalletConnectService extends ChangeNotifier {
     try {
       final result = await _pendingRequestCompleter!.future;
       _lastRequestDebug =
-          'eth_sendTransaction approved with result length=${result.length}';
+          'eth_sendTransaction approved result=${_summarizeResult(result)}';
       notifyListeners();
       return result;
     } finally {
@@ -449,7 +460,7 @@ class WalletConnectService extends ChangeNotifier {
     }
     _lastRequestDebug =
         'rejected ${request.method} id=${request.requestId} via completer';
-    _lastErrorDebug = '';
+    _lastErrorDebug = 'USER_REJECTED_SIGN';
     _pendingRequestCompleter = null;
     _clearPendingRequest();
   }
@@ -461,38 +472,189 @@ class WalletConnectService extends ChangeNotifier {
       return;
     }
 
-    final result = _buildFakeResultFor(request);
-    if (!completer.isCompleted) {
-      completer.complete(result);
+    try {
+      final result = await _resolvePendingRequest(request);
+      if (!completer.isCompleted) {
+        completer.complete(result);
+      }
+      _lastRequestDebug =
+          'approved ${request.method} id=${request.requestId} result=${_summarizeResult(result)}';
+      _lastErrorDebug = '';
+      notifyListeners();
+    } catch (error, stackTrace) {
+      debugPrint('WalletConnect approve error: $error\n$stackTrace');
+      final wrappedError = error is WalletConnectRequestException
+          ? error
+          : WalletConnectRequestException('$error');
+      if (!completer.isCompleted) {
+        completer.completeError(wrappedError);
+      }
+      _lastErrorDebug = 'approve failed: ${wrappedError.message}';
+      notifyListeners();
+      throw wrappedError;
+    } finally {
+      _pendingRequestCompleter = null;
+      _clearPendingRequest();
     }
-    _lastRequestDebug =
-        'approved placeholder for ${request.method} id=${request.requestId}';
-    _lastErrorDebug = '';
-    _pendingRequestCompleter = null;
-    _clearPendingRequest();
   }
 
-  String _buildFakeResultFor(PendingWcRequest request) {
+  Future<String> _resolvePendingRequest(PendingWcRequest request) {
     switch (request.method) {
       case 'personal_sign':
-        return _fakeSignatureHex();
+        return _signPersonalMessage(request);
       case 'eth_sendTransaction':
-        return _fakeTxHashHex();
+        return _sendAndBroadcastTransaction(request);
       default:
-        return _fakeSignatureHex();
+        throw WalletConnectRequestException(
+          'Unsupported method ${request.method}',
+        );
     }
   }
 
-  String _fakeSignatureHex() {
-    final String r = List<String>.filled(32, '11').join();
-    final String s = List<String>.filled(32, '22').join();
-    const String v = '1b';
-    return '0x$r$s$v';
+  Future<String> _signPersonalMessage(PendingWcRequest request) async {
+    final params = _asList(request.params);
+    if (params.isEmpty) {
+      throw WalletConnectRequestException('personal_sign params are empty');
+    }
+
+    final walletAddress = walletApi.getAddress();
+    if (walletAddress == null) {
+      throw WalletConnectRequestException('Wallet address unavailable');
+    }
+
+    String? messageParam;
+    String? addressParam;
+
+    if (params.length >= 2) {
+      final first = params[0];
+      final second = params[1];
+      if (first is String && _looksLikeAddress(first)) {
+        addressParam = first;
+        if (second is String) {
+          messageParam = second;
+        }
+      } else {
+        if (first is String) {
+          messageParam = first;
+        }
+        if (second is String && _looksLikeAddress(second)) {
+          addressParam = second;
+        }
+      }
+    }
+
+    messageParam ??= params
+        .whereType<String>()
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    if (messageParam.isEmpty) {
+      throw WalletConnectRequestException('personal_sign message is missing');
+    }
+
+    addressParam ??= params.whereType<String>().firstWhere(
+          (value) => _looksLikeAddress(value),
+          orElse: () => walletAddress.hexEip55,
+        );
+
+    if (!_sameAddress(addressParam, walletAddress.hexEip55)) {
+      debugPrint(
+        'WalletConnect personal_sign address mismatch: requested=$addressParam wallet=${walletAddress.hexEip55}',
+      );
+    }
+
+    final messageBytes = _messageToBytes(messageParam);
+    final signature = await walletApi.signMessage(messageBytes);
+    if (signature == null || signature.isEmpty) {
+      throw WalletConnectRequestException('Failed to sign message');
+    }
+
+    return signature;
   }
 
-  String _fakeTxHashHex() {
-    const String chunk = 'aa';
-    final String body = List<String>.filled(32, chunk).join();
-    return '0x$body';
+  Future<String> _sendAndBroadcastTransaction(
+    PendingWcRequest request,
+  ) async {
+    final params = _asList(request.params);
+    if (params.isEmpty || params.first is! Map) {
+      throw WalletConnectRequestException(
+        'eth_sendTransaction params must include transaction object',
+      );
+    }
+
+    final walletAddress = walletApi.getAddress();
+    if (walletAddress == null) {
+      throw WalletConnectRequestException('Wallet address unavailable');
+    }
+
+    final txParams = Map<String, dynamic>.from(params.first as Map);
+    final fromValue = txParams['from'];
+    if (fromValue is String && !_sameAddress(fromValue, walletAddress.hexEip55)) {
+      throw WalletConnectRequestException('Transaction from does not match wallet');
+    }
+
+    final hash = await walletApi.sendTransaction(txParams);
+    if (hash == null || hash.isEmpty) {
+      throw WalletConnectRequestException('Failed to send transaction');
+    }
+    return hash;
+  }
+
+  List<dynamic> _asList(dynamic value) {
+    if (value == null) {
+      return const [];
+    }
+    if (value is List) {
+      return List<dynamic>.from(value);
+    }
+    return <dynamic>[value];
+  }
+
+  Uint8List _messageToBytes(String message) {
+    if (message.startsWith('0x') || message.startsWith('0X')) {
+      return _hexToBytes(message);
+    }
+    return Uint8List.fromList(utf8.encode(message));
+  }
+
+  Uint8List _hexToBytes(String value) {
+    final cleaned = value.startsWith('0x') || value.startsWith('0X')
+        ? value.substring(2)
+        : value;
+    if (cleaned.isEmpty) {
+      return Uint8List(0);
+    }
+    if (cleaned.length.isOdd) {
+      throw WalletConnectRequestException('Invalid hex string length');
+    }
+    final result = Uint8List(cleaned.length ~/ 2);
+    for (int i = 0; i < cleaned.length; i += 2) {
+      final byteString = cleaned.substring(i, i + 2);
+      final byteValue = int.tryParse(byteString, radix: 16);
+      if (byteValue == null) {
+        throw WalletConnectRequestException('Invalid hex character in message');
+      }
+      result[i ~/ 2] = byteValue;
+    }
+    return result;
+  }
+
+  bool _looksLikeAddress(String value) {
+    final normalized = value.toLowerCase();
+    return normalized.startsWith('0x') && normalized.length == 42;
+  }
+
+  bool _sameAddress(String a, String b) {
+    return _normalizeAddress(a) == _normalizeAddress(b);
+  }
+
+  String _normalizeAddress(String value) {
+    final lower = value.toLowerCase();
+    return lower.startsWith('0x') ? lower.substring(2) : lower;
+  }
+
+  String _summarizeResult(String value) {
+    if (value.length <= 12) {
+      return value;
+    }
+    return '${value.substring(0, 12)}…';
   }
 }

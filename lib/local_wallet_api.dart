@@ -10,4 +10,5 @@ abstract class LocalWalletApi {
     required EthereumAddress to,
     required EtherAmount value,
   });
+  Future<String?> sendTransaction(Map<String, dynamic> transaction);
 }

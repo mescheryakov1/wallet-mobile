@@ -42,16 +42,36 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
   PendingWcRequest? get _request => _service.pendingRequest;
 
   Future<void> _approve() async {
-    await _service.approvePendingRequest();
-    if (mounted) {
+    try {
+      await _service.approvePendingRequest();
+      if (!mounted) {
+        return;
+      }
       Navigator.of(context).pop();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Ошибка: $error')),
+      );
     }
   }
 
   Future<void> _reject() async {
-    await _service.rejectPendingRequest();
-    if (mounted) {
+    try {
+      await _service.rejectPendingRequest();
+      if (!mounted) {
+        return;
+      }
       Navigator.of(context).pop();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Ошибка: $error')),
+      );
     }
   }
 
