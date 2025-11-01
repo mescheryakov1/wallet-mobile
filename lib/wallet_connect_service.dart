@@ -78,7 +78,9 @@ class WalletConnectService extends ChangeNotifier {
   WalletConnectService({
     required this.walletApi,
     String? projectId,
-  }) : projectId = projectId ?? _defaultWalletConnectProjectId;
+  })  : projectId = projectId ?? _defaultWalletConnectProjectId {
+    _attachWalletListenerIfNeeded();
+  }
 
   final LocalWalletApi walletApi;
   final String projectId;
@@ -96,6 +98,7 @@ class WalletConnectService extends ChangeNotifier {
   WalletConnectPendingRequest? _pendingRequest;
   Completer<String>? _pendingRequestCompleter;
   WalletConnectActivityEntry? _lastActivityEntry;
+  bool _walletListenerAttached = false;
   final StreamController<WalletConnectRequestEvent>
       _requestEventsController =
       StreamController<WalletConnectRequestEvent>.broadcast();
@@ -154,10 +157,28 @@ class WalletConnectService extends ChangeNotifier {
     await initWalletConnect();
   }
 
+  void _attachWalletListenerIfNeeded() {
+    if (_walletListenerAttached) {
+      return;
+    }
+    final api = walletApi;
+    if (api is ChangeNotifier) {
+      api.addListener(_handleWalletUpdated);
+      _walletListenerAttached = true;
+    }
+  }
+
+  void _handleWalletUpdated() {
+    if (!_handlersRegistered && walletApi.getAddress() != null) {
+      _registerAccountAndHandlers();
+    }
+  }
+
   Future<void> initWalletConnect() async {
     if (_client != null) {
       return;
     }
+    _attachWalletListenerIfNeeded();
 
     if (projectId.isEmpty) {
       _status = 'missing project id';
@@ -983,6 +1004,13 @@ class WalletConnectService extends ChangeNotifier {
       client.onSessionRequest.unsubscribe(_onSessionRequest);
       client.onSessionConnect.unsubscribe(_onSessionConnect);
       client.onSessionDelete.unsubscribe(_onSessionDelete);
+    }
+    if (_walletListenerAttached) {
+      final api = walletApi;
+      if (api is ChangeNotifier) {
+        api.removeListener(_handleWalletUpdated);
+      }
+      _walletListenerAttached = false;
     }
     if (!_requestEventsController.isClosed) {
       _requestEventsController.close();

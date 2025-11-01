@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'wallet_connect_manager.dart';
@@ -20,7 +22,7 @@ class WalletConnectRequestListener extends StatefulWidget {
 class _WalletConnectRequestListenerState
     extends State<WalletConnectRequestListener> {
   final WalletConnectManager _manager = WalletConnectManager.instance;
-  WalletConnectRequestLogEntry? _activeEntry;
+  OverlayEntry? _bannerEntry;
   bool _dialogOpen = false;
 
   @override
@@ -33,6 +35,7 @@ class _WalletConnectRequestListenerState
   @override
   void dispose() {
     _manager.requestQueue.removeListener(_handleQueueUpdate);
+    _hideBanner();
     super.dispose();
   }
 
@@ -42,26 +45,26 @@ class _WalletConnectRequestListenerState
     }
     final WalletConnectRequestLogEntry? pending =
         _manager.firstPendingLog;
-    if (pending != null) {
-      if (_dialogOpen &&
-          _activeEntry?.request.requestId == pending.request.requestId) {
-        return;
+    if (pending == null) {
+      if (!_dialogOpen) {
+        _hideBanner();
       }
-      _activeEntry = pending;
-      _dialogOpen = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) {
-          return;
-        }
-        _openDialog(pending);
-      });
-    } else {
-      _activeEntry = null;
-      _dialogOpen = false;
+      return;
     }
+
+    if (_dialogOpen) {
+      return;
+    }
+
+    _showBanner(pending);
   }
 
   Future<void> _openDialog(WalletConnectRequestLogEntry entry) async {
+    if (_dialogOpen) {
+      return;
+    }
+    _dialogOpen = true;
+    _hideBanner();
     await Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute<bool>(
         builder: (_) => WcRequestApprovalPage(
@@ -75,13 +78,125 @@ class _WalletConnectRequestListenerState
       return;
     }
     _dialogOpen = false;
-    _activeEntry = null;
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _handleQueueUpdate());
+  }
+
+  void _showBanner(WalletConnectRequestLogEntry entry) {
+    final overlay = Overlay.of(context, rootOverlay: true);
+    if (overlay == null) {
+      return;
+    }
+    _hideBanner();
+    _bannerEntry = OverlayEntry(
+      builder: (BuildContext context) {
+        return _WalletConnectRequestBanner(
+          entry: entry,
+          onReview: () => _openDialog(entry),
+          onReject: () => _rejectRequest(entry),
+        );
+      },
+    );
+    overlay.insert(_bannerEntry!);
+  }
+
+  void _hideBanner() {
+    _bannerEntry?.remove();
+    _bannerEntry = null;
+  }
+
+  Future<void> _rejectRequest(WalletConnectRequestLogEntry entry) async {
+    try {
+      await _manager.rejectRequest(entry.request.requestId);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Failed to reject request: $error')),
+      );
+    } finally {
+      if (mounted) {
+        _hideBanner();
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return widget.child;
+  }
+}
+
+class _WalletConnectRequestBanner extends StatelessWidget {
+  const _WalletConnectRequestBanner({
+    required this.entry,
+    required this.onReview,
+    required this.onReject,
+  });
+
+  final WalletConnectRequestLogEntry entry;
+  final Future<void> Function() onReview;
+  final Future<void> Function() onReject;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final method = entry.request.method;
+    final chainLabel = entry.request.chainId ?? 'unknown chain';
+    final subtitle = '$method • $chainLabel';
+
+    return SafeArea(
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Material(
+            elevation: 6,
+            borderRadius: BorderRadius.circular(12),
+            color: theme.colorScheme.surface,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'WalletConnect request',
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(subtitle, style: theme.textTheme.bodyMedium),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () {
+                            unawaited(onReject());
+                          },
+                          child: const Text('Reject'),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: () {
+                            unawaited(onReview());
+                          },
+                          child: const Text('Review'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
