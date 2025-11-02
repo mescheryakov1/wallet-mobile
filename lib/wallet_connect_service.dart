@@ -689,6 +689,10 @@ class WalletConnectService extends ChangeNotifier {
   }
 
   Future<void> startPairing(String uri) async {
+    if (_client == null) {
+      await initWalletConnect();
+    }
+
     final client = _client;
     if (client == null) {
       _status = 'not initialized';
