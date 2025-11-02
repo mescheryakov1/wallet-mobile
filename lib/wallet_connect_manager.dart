@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import 'local_wallet_api.dart';
 import 'wallet_connect_models.dart';
+import 'wallet_connect_popup_controller.dart';
 import 'wallet_connect_service.dart';
 
 class WalletConnectManager extends ChangeNotifier {
@@ -81,6 +82,12 @@ class WalletConnectManager extends ChangeNotifier {
 
   void dismissRequest(int requestId) {
     requestQueue.dismiss(requestId);
+    final WalletConnectRequestLogEntry? nextPending = _firstActionableRequest();
+    if (nextPending != null) {
+      WalletConnectPopupController.show(nextPending);
+    } else {
+      WalletConnectPopupController.hide();
+    }
     notifyListeners();
   }
 
@@ -106,7 +113,26 @@ class WalletConnectManager extends ChangeNotifier {
           : existing?.txHash,
     );
     requestQueue.addOrUpdate(entry);
+    final WalletConnectRequestLogEntry? nextPending =
+        _firstActionableRequest();
+    if (nextPending != null) {
+      WalletConnectPopupController.show(nextPending);
+    } else {
+      WalletConnectPopupController.hide();
+    }
     notifyListeners();
+  }
+
+
+  WalletConnectRequestLogEntry? _firstActionableRequest() {
+    for (final WalletConnectRequestLogEntry entry in requestQueue.entries) {
+      if (!entry.isDismissed &&
+          (entry.status == WalletConnectRequestStatus.pending ||
+              entry.status == WalletConnectRequestStatus.broadcasting)) {
+        return entry;
+      }
+    }
+    return null;
   }
 
   @override

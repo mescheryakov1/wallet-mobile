@@ -10,13 +10,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web3dart/crypto.dart';
 import 'package:web3dart/web3dart.dart';
 
+import 'app_navigation.dart';
 import 'local_wallet_api.dart';
 import 'network_config.dart';
 import 'wallet_connect_activity_screen.dart';
 import 'wallet_connect_manager.dart';
-import 'wallet_connect_page.dart';
 import 'wallet_connect_models.dart';
-import 'wallet_connect_request_popup.dart';
+import 'wallet_connect_page.dart';
 void main() {
   runApp(const WalletApp());
 }
@@ -33,6 +33,7 @@ class WalletApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
+      navigatorKey: appNavigatorKey,
       home: const WalletHomePage(),
     );
   }
@@ -188,36 +189,7 @@ class _WalletHomePageState extends State<WalletHomePage> {
           ),
         ],
       ),
-      body: AnimatedBuilder(
-        animation: Listenable.merge(
-          <Listenable>[
-            WalletConnectManager.instance,
-            WalletConnectManager.instance.requestQueue,
-          ],
-        ),
-        builder: (BuildContext context, Widget? _) {
-          final WalletConnectRequestLogEntry? pendingEntry =
-              WalletConnectManager.instance.firstPendingLog;
-
-          return Stack(
-            children: [
-              _buildMainContent(context),
-              if (pendingEntry != null)
-                WalletConnectRequestPopup(
-                  entry: pendingEntry,
-                  onApprove: () =>
-                      _handleRequestApproval(pendingEntry.request.requestId),
-                  onReject: () =>
-                      _handleRequestRejection(pendingEntry.request.requestId),
-                  onDismiss: () =>
-                      WalletConnectManager.instance.dismissRequest(
-                    pendingEntry.request.requestId,
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
+      body: _buildMainContent(context),
     );
   }
 
@@ -285,45 +257,6 @@ class _WalletHomePageState extends State<WalletHomePage> {
     );
   }
 
-  Future<void> _handleRequestApproval(int requestId) async {
-    try {
-      await WalletConnectManager.instance.approveRequest(requestId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request approved')),
-      );
-    } on StateError catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request is no longer pending')),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to approve request: $error')),
-      );
-    }
-  }
-
-  Future<void> _handleRequestRejection(int requestId) async {
-    try {
-      await WalletConnectManager.instance.rejectRequest(requestId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request rejected')),
-      );
-    } on StateError catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request is no longer pending')),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to reject request: $error')),
-      );
-    }
-  }
 }
 
 class _TransactionForm extends StatelessWidget {

@@ -67,9 +67,9 @@ class _WalletConnectRequestPopupState
     final bool isPending =
         widget.entry.status == WalletConnectRequestStatus.pending;
 
-    return Positioned.fill(
-      child: Material(
-        color: Colors.black54,
+    return Material(
+      color: Colors.black54,
+      child: SafeArea(
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 420),

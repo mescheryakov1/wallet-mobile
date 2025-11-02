@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import 'wallet_connect_manager.dart';
 import 'wallet_connect_models.dart';
-import 'wallet_connect_request_popup.dart';
 import 'wallet_connect_service.dart';
 
 class WalletConnectPairPage extends StatefulWidget {
@@ -47,46 +46,6 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
     }
   }
 
-  Future<void> _handleRequestApproval(int requestId) async {
-    try {
-      await _manager.approveRequest(requestId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request approved')),
-      );
-    } on StateError catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request is no longer pending')),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to approve request: $error')),
-      );
-    }
-  }
-
-  Future<void> _handleRequestRejection(int requestId) async {
-    try {
-      await _manager.rejectRequest(requestId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request rejected')),
-      );
-    } on StateError catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request is no longer pending')),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to reject request: $error')),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -101,45 +60,16 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
         final bool isPairing = _service.pairingInProgress;
         final String? error = _service.pairingError;
         final WalletSessionInfo? session = _service.primarySessionInfo;
-        final WalletConnectRequestLogEntry? pendingEntry =
-            _findPendingSessionProposal();
-        final bool showPopup = pendingEntry != null;
-
         return Scaffold(
           appBar: AppBar(
             title: const Text('Connect via URI'),
           ),
-          body: Stack(
-            children: [
-              session != null
-                  ? _buildConnectedBody(context, session)
-                  : _buildConnectForm(isPairing: isPairing, error: error),
-              if (showPopup && pendingEntry != null)
-                WalletConnectRequestPopup(
-                  entry: pendingEntry,
-                  onApprove: () =>
-                      _handleRequestApproval(pendingEntry.request.requestId),
-                  onReject: () =>
-                      _handleRequestRejection(pendingEntry.request.requestId),
-                  onDismiss: () =>
-                      _manager.dismissRequest(pendingEntry.request.requestId),
-                ),
-            ],
-          ),
+          body: session != null
+              ? _buildConnectedBody(context, session)
+              : _buildConnectForm(isPairing: isPairing, error: error),
         );
       },
     );
-  }
-
-  WalletConnectRequestLogEntry? _findPendingSessionProposal() {
-    for (final WalletConnectRequestLogEntry entry in _manager.activityLog) {
-      if (entry.status == WalletConnectRequestStatus.pending &&
-          entry.request.method == 'session_proposal' &&
-          !entry.isDismissed) {
-        return entry;
-      }
-    }
-    return null;
   }
 
   Widget _buildConnectForm({
