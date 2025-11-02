@@ -1293,7 +1293,27 @@ class WalletConnectService extends ChangeNotifier {
     }
   }
 
-  Future<void> rejectPendingRequest(int requestId, {String? reason}) async {
+  int _parseRequestId(String requestId) {
+    final int? parsed = int.tryParse(requestId);
+    if (parsed == null) {
+      throw ArgumentError.value(
+        requestId,
+        'requestId',
+        'Must be a valid integer',
+      );
+    }
+    return parsed;
+  }
+
+  Future<void> rejectRequest(
+    String requestId, {
+    String? reason,
+  }) async {
+    final int id = _parseRequestId(requestId);
+    await _rejectPendingRequest(id, reason: reason);
+  }
+
+  Future<void> _rejectPendingRequest(int requestId, {String? reason}) async {
     if (_isRequestHandled(requestId)) {
       return;
     }
@@ -1342,7 +1362,12 @@ class WalletConnectService extends ChangeNotifier {
     _clearPendingRequest();
   }
 
-  Future<void> approvePendingRequest(int requestId) async {
+  Future<void> approveRequest(String requestId) async {
+    final int id = _parseRequestId(requestId);
+    await _approvePendingRequest(id);
+  }
+
+  Future<void> _approvePendingRequest(int requestId) async {
     if (_isRequestHandled(requestId)) {
       return;
     }

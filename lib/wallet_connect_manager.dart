@@ -65,7 +65,7 @@ class WalletConnectManager extends ChangeNotifier {
     if (entry.status != WalletConnectRequestStatus.pending) {
       return;
     }
-    await service.approvePendingRequest(requestId);
+    await service.approveRequest(requestId.toString());
   }
 
   Future<void> rejectRequest(int requestId) async {
@@ -76,7 +76,7 @@ class WalletConnectManager extends ChangeNotifier {
     if (entry.status != WalletConnectRequestStatus.pending) {
       return;
     }
-    await service.rejectPendingRequest(requestId);
+    await service.rejectRequest(requestId.toString());
   }
 
   void dismissRequest(int requestId) {
