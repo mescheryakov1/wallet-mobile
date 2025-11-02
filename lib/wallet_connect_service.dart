@@ -4,13 +4,15 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart';
+import 'package:web3dart/web3dart.dart';
 
 import 'local_wallet_api.dart';
 import 'network_config.dart';
 import 'wallet_connect_models.dart';
-import 'transaction_dispatcher.dart';
+import 'nonce_manager.dart';
 
 const String _defaultWalletConnectProjectId =
     'ac79370327e3526ba018428bc44831f1';
@@ -84,8 +86,7 @@ class WalletConnectService extends ChangeNotifier {
   WalletConnectService({
     required this.walletApi,
     String? projectId,
-  })  : projectId = projectId ?? _defaultWalletConnectProjectId,
-        _dispatcher = TransactionDispatcher.instance(walletApi) {
+  })  : projectId = projectId ?? _defaultWalletConnectProjectId {
     _attachWalletListenerIfNeeded();
   }
 
@@ -94,7 +95,6 @@ class WalletConnectService extends ChangeNotifier {
 
   final List<String> activeSessions = [];
   final List<WalletSessionInfo> _sessionInfos = [];
-  final TransactionDispatcher _dispatcher;
 
   SignClient? _client;
   String _status = 'disconnected';
@@ -606,7 +606,43 @@ class WalletConnectService extends ChangeNotifier {
     if (infos.isEmpty) {
       _lastActivityEntry = null;
     }
+    _resetNonceCacheForSessions(infos);
     notifyListeners();
+  }
+
+  void _resetNonceCacheForSessions(List<WalletSessionInfo> infos) {
+    final NonceManager manager = NonceManager.instance;
+    if (infos.isEmpty) {
+      final EthereumAddress? address = walletApi.getAddress();
+      if (address == null) {
+        return;
+      }
+      for (final NetworkConfig config in walletConnectSupportedNetworks) {
+        manager.resetChainAddress(
+          chainId: config.chainIdCaip2,
+          address: address.hexEip55,
+        );
+      }
+      return;
+    }
+
+    for (final WalletSessionInfo info in infos) {
+      for (final String account in info.accounts) {
+        final List<String> parts = account.split(':');
+        if (parts.length < 3) {
+          continue;
+        }
+        final String chain = '${parts[0]}:${parts[1]}'.toLowerCase();
+        final String addressPart = parts.sublist(2).join(':');
+        final String normalizedAddress = addressPart.startsWith('0x')
+            ? addressPart
+            : '0x$addressPart';
+        manager.resetChainAddress(
+          chainId: chain,
+          address: normalizedAddress,
+        );
+      }
+    }
   }
 
   void _recordActivity({
@@ -1505,45 +1541,217 @@ class WalletConnectService extends ChangeNotifier {
     txParams['chainId'] ??=
         '0x${network.chainIdNumeric.toRadixString(16)}';
 
-    final DispatchResult dispatchResult = await _dispatcher.sendTransaction(
-      request: request,
-      txParams: txParams,
-      network: network,
-    );
-
-    switch (dispatchResult.status) {
-      case DispatchStatus.ok:
-      case DispatchStatus.alreadyBroadcast:
-        final String? hash = dispatchResult.txHash;
-        if (hash == null || hash.isEmpty) {
-          throw WalletConnectRequestException(
-            'Transaction hash unavailable after broadcast.',
-          );
-        }
-        return hash;
-      case DispatchStatus.mismatchNonce:
-        throw WalletConnectRequestException(
-          dispatchResult.errorMessage ??
-              'Outdated request. Please request again.',
-          isRejected: true,
-        );
-      case DispatchStatus.staleNonce:
-        throw WalletConnectRequestException(
-          dispatchResult.errorMessage ??
-              'Transaction was already sent. Nonce already used.',
-          isRejected: true,
-        );
-      case DispatchStatus.underpricedReplacement:
-        throw WalletConnectRequestException(
-          dispatchResult.errorMessage ??
-              'Network rejected transaction: gas price too low for replacement.',
-          isRejected: true,
-        );
-      case DispatchStatus.rpcError:
-        throw WalletConnectRequestException(
-          dispatchResult.errorMessage ?? 'Failed to send transaction.',
-        );
+    final Map<String, dynamic> baseTx = Map<String, dynamic>.from(txParams);
+    final dynamic legacyGasLimit = baseTx.remove('gasLimit');
+    baseTx.remove('nonce');
+    if (baseTx['gas'] == null && legacyGasLimit != null) {
+      baseTx['gas'] = legacyGasLimit;
     }
+
+    return _withWeb3Client(network, (client) async {
+      await _ensureGasParameters(baseTx, client);
+
+      final String chainId = network.chainIdCaip2.toLowerCase();
+      final String fromAddress = walletAddress.hexEip55;
+      int attempts = 0;
+      const int maxAttempts = 3;
+
+      int currentNonce = await NonceManager.instance.getAndIncrementNonce(
+        chainId: chainId,
+        address: fromAddress,
+        client: client,
+      );
+
+      Map<String, dynamic> workingTx = Map<String, dynamic>.from(baseTx)
+        ..['nonce'] = _encodeQuantity(BigInt.from(currentNonce));
+
+      while (true) {
+        SignedTransactionDetails? signed;
+        try {
+          signed = await walletApi.signTransactionForNetwork(workingTx, network);
+        } catch (error) {
+          NonceManager.instance.invalidateNonce(
+            chainId: chainId,
+            address: fromAddress,
+            usedNonce: currentNonce,
+          );
+          throw WalletConnectRequestException('$error');
+        }
+        if (signed == null) {
+          NonceManager.instance.invalidateNonce(
+            chainId: chainId,
+            address: fromAddress,
+            usedNonce: currentNonce,
+          );
+          throw WalletConnectRequestException('Failed to sign transaction.');
+        }
+
+        try {
+          final String? broadcastHash =
+              await walletApi.broadcastSignedTransaction(
+            signed.rawTransaction,
+            network,
+          );
+          final String hash =
+              (broadcastHash == null || broadcastHash.isEmpty)
+                  ? signed.hash
+                  : broadcastHash;
+          return hash;
+        } catch (error) {
+          final String message = error.toString();
+          final String lower = message.toLowerCase();
+
+          if (lower.contains('already known')) {
+            return signed.hash;
+          }
+
+          if (_isNonceTooLowError(lower)) {
+            if (attempts >= maxAttempts) {
+              NonceManager.instance.resetChainAddress(
+                chainId: chainId,
+                address: fromAddress,
+              );
+              throw WalletConnectRequestException(
+                'Transaction was already sent. Nonce already used.',
+                isRejected: true,
+              );
+            }
+            attempts++;
+            NonceManager.instance.resetChainAddress(
+              chainId: chainId,
+              address: fromAddress,
+            );
+            currentNonce = await NonceManager.instance.getAndIncrementNonce(
+              chainId: chainId,
+              address: fromAddress,
+              client: client,
+            );
+            workingTx = Map<String, dynamic>.from(baseTx)
+              ..['nonce'] = _encodeQuantity(BigInt.from(currentNonce));
+            continue;
+          }
+
+          if (lower.contains('replacement transaction underpriced')) {
+            if (attempts >= maxAttempts) {
+              NonceManager.instance.invalidateNonce(
+                chainId: chainId,
+                address: fromAddress,
+                usedNonce: currentNonce,
+              );
+              throw WalletConnectRequestException(
+                'Network rejected transaction: gas price too low for replacement.',
+                isRejected: true,
+              );
+            }
+            attempts++;
+            workingTx = Map<String, dynamic>.from(workingTx);
+            _bumpGasFees(workingTx);
+            continue;
+          }
+
+          NonceManager.instance.invalidateNonce(
+            chainId: chainId,
+            address: fromAddress,
+            usedNonce: currentNonce,
+          );
+          throw WalletConnectRequestException(message);
+        }
+      }
+    });
+  }
+
+  Future<T> _withWeb3Client<T>(
+    NetworkConfig network,
+    Future<T> Function(Web3Client client) action,
+  ) async {
+    final Web3Client client = Web3Client(network.rpcUrl, http.Client());
+    try {
+      return await action(client);
+    } finally {
+      client.dispose();
+    }
+  }
+
+  Future<void> _ensureGasParameters(
+    Map<String, dynamic> transaction,
+    Web3Client client,
+  ) async {
+    final BigInt? gasPrice = _parseQuantity(transaction['gasPrice']);
+    final BigInt? maxFeePerGas = _parseQuantity(transaction['maxFeePerGas']);
+    final BigInt? maxPriorityFeePerGas =
+        _parseQuantity(transaction['maxPriorityFeePerGas']);
+
+    if ((gasPrice == null || gasPrice == BigInt.zero) &&
+        maxFeePerGas == null &&
+        maxPriorityFeePerGas == null) {
+      final EtherAmount networkGasPrice = await client.getGasPrice();
+      transaction['gasPrice'] =
+          _encodeQuantity(networkGasPrice.getInWei);
+    }
+
+    final BigInt? gasLimit =
+        _parseQuantity(transaction['gas'] ?? transaction['gasLimit']);
+    if (gasLimit == null || gasLimit == BigInt.zero) {
+      transaction['gas'] = '0x5208';
+    }
+  }
+
+  void _bumpGasFees(Map<String, dynamic> transaction) {
+    void bumpField(String key) {
+      final BigInt? value = _parseQuantity(transaction[key]);
+      if (value == null) {
+        return;
+      }
+      final BigInt bumped = _increaseByPercent(value, 15);
+      transaction[key] = _encodeQuantity(bumped);
+    }
+
+    bumpField('gasPrice');
+    bumpField('maxFeePerGas');
+    bumpField('maxPriorityFeePerGas');
+  }
+
+  bool _isNonceTooLowError(String lowerCasedMessage) {
+    return lowerCasedMessage.contains('nonce too low') ||
+        lowerCasedMessage.contains('nonce is too low') ||
+        lowerCasedMessage.contains('nonce lower than expected');
+  }
+
+  BigInt _increaseByPercent(BigInt value, int percent) {
+    final BigInt multiplied = (value * BigInt.from(100 + percent)) ~/
+        BigInt.from(100);
+    if (multiplied <= value) {
+      return value + BigInt.one;
+    }
+    return multiplied;
+  }
+
+  BigInt? _parseQuantity(dynamic value) {
+    if (value == null) {
+      return null;
+    }
+    if (value is BigInt) {
+      return value;
+    }
+    if (value is int) {
+      return BigInt.from(value);
+    }
+    if (value is String) {
+      if (value.isEmpty) {
+        return null;
+      }
+      final bool isHex = value.startsWith('0x') || value.startsWith('0X');
+      final String cleaned = isHex ? value.substring(2) : value;
+      if (cleaned.isEmpty) {
+        return BigInt.zero;
+      }
+      return BigInt.parse(cleaned, radix: isHex ? 16 : 10);
+    }
+    throw ArgumentError('Unsupported quantity type: $value');
+  }
+
+  String _encodeQuantity(BigInt value) {
+    return '0x${value.toRadixString(16)}';
   }
 
   List<dynamic> _asList(dynamic value) {
