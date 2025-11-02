@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:web3dart/crypto.dart';
 import 'package:web3dart/web3dart.dart';
 
 import 'local_wallet_api.dart';
@@ -832,12 +833,126 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
   Future<String?> sendTransactionOnNetwork(
     Map<String, dynamic> transaction,
     NetworkConfig network,
-  ) {
-    return _sendTransactionInternal(
-      transaction,
-      rpcUrl: network.rpcUrl,
+  ) async {
+    final SignedTransactionDetails? signed =
+        await signTransactionForNetwork(transaction, network);
+    if (signed == null) {
+      return null;
+    }
+    try {
+      final String? broadcastHash = await broadcastSignedTransaction(
+        signed.rawTransaction,
+        network,
+      );
+      if (broadcastHash == null || broadcastHash.isEmpty) {
+        return signed.hash;
+      }
+      return broadcastHash;
+    } catch (error) {
+      final String message = error.toString().toLowerCase();
+      if (message.contains('already known')) {
+        return signed.hash;
+      }
+      rethrow;
+    }
+  }
+
+  @override
+  Future<SignedTransactionDetails?> signTransactionForNetwork(
+    Map<String, dynamic> transaction,
+    NetworkConfig network,
+  ) async {
+    final WalletData? currentWallet = wallet;
+    if (currentWallet == null) {
+      return null;
+    }
+
+    final String privateKey = currentWallet.privateKey;
+    if (privateKey.isEmpty) {
+      return null;
+    }
+
+    final String normalizedKey =
+        privateKey.startsWith('0x') ? privateKey.substring(2) : privateKey;
+    final EthPrivateKey credentials = EthPrivateKey.fromHex(normalizedKey);
+
+    final dynamic toValue = transaction['to'];
+    EthereumAddress? to;
+    if (toValue is String && toValue.isNotEmpty) {
+      to = EthereumAddress.fromHex(toValue);
+    }
+
+    final BigInt? valueQuantity = _parseQuantity(transaction['value']);
+    final BigInt? gasQuantity = _parseQuantity(transaction['gas']);
+    final BigInt? gasPriceQuantity = _parseQuantity(transaction['gasPrice']);
+    final BigInt? maxFeePerGasQuantity =
+        _parseQuantity(transaction['maxFeePerGas']);
+    final BigInt? maxPriorityFeePerGasQuantity =
+        _parseQuantity(transaction['maxPriorityFeePerGas']);
+    final BigInt? nonceQuantity = _parseQuantity(transaction['nonce']);
+
+    final dynamic dataValue = transaction['data'];
+    Uint8List? data;
+    if (dataValue is String && dataValue.isNotEmpty) {
+      data = _decodeHexData(dataValue);
+    }
+
+    final Transaction tx = Transaction(
+      from: currentWallet.address,
+      to: to,
+      value:
+          valueQuantity != null ? EtherAmount.inWei(valueQuantity) : null,
+      gasPrice: gasPriceQuantity != null && maxFeePerGasQuantity == null
+          ? EtherAmount.inWei(gasPriceQuantity)
+          : null,
+      maxGas: _bigIntToInt(gasQuantity),
+      nonce: _bigIntToInt(nonceQuantity),
+      data: data,
+      maxFeePerGas: maxFeePerGasQuantity != null
+          ? EtherAmount.inWei(maxFeePerGasQuantity)
+          : null,
+      maxPriorityFeePerGas: maxPriorityFeePerGasQuantity != null
+          ? EtherAmount.inWei(maxPriorityFeePerGasQuantity)
+          : null,
+    );
+
+    final Uint8List signed = await credentials.signTransaction(
+      tx,
       chainId: network.chainIdNumeric,
     );
+    final String hash = '0x${bytesToHex(keccak256(signed))}';
+    return SignedTransactionDetails(
+      rawTransaction: signed,
+      hash: hash,
+    );
+  }
+
+  @override
+  Future<String?> broadcastSignedTransaction(
+    Uint8List signedTransaction,
+    NetworkConfig network,
+  ) {
+    return _withClientForRpc(network.rpcUrl, (client) {
+      return client.sendRawTransaction(signedTransaction);
+    });
+  }
+
+  @override
+  Future<BigInt?> getPendingNonce(
+    NetworkConfig network,
+    EthereumAddress address,
+  ) async {
+    try {
+      final int nonce = await _withClientForRpc(network.rpcUrl, (client) {
+        return client.getTransactionCount(
+          address,
+          atBlock: const BlockNum.pending(),
+        );
+      });
+      return BigInt.from(nonce);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<String?> _sendTransactionInternal(

@@ -10,6 +10,7 @@ import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart';
 import 'local_wallet_api.dart';
 import 'network_config.dart';
 import 'wallet_connect_models.dart';
+import 'transaction_dispatcher.dart';
 
 const String _defaultWalletConnectProjectId =
     'ac79370327e3526ba018428bc44831f1';
@@ -67,9 +68,13 @@ class _NamespaceConfig {
 }
 
 class WalletConnectRequestException implements Exception {
-  WalletConnectRequestException(this.message);
+  WalletConnectRequestException(
+    this.message, {
+    this.isRejected = false,
+  });
 
   final String message;
+  final bool isRejected;
 
   @override
   String toString() => message;
@@ -79,7 +84,8 @@ class WalletConnectService extends ChangeNotifier {
   WalletConnectService({
     required this.walletApi,
     String? projectId,
-  })  : projectId = projectId ?? _defaultWalletConnectProjectId {
+  })  : projectId = projectId ?? _defaultWalletConnectProjectId,
+        _dispatcher = TransactionDispatcher.instance(walletApi) {
     _attachWalletListenerIfNeeded();
   }
 
@@ -88,6 +94,7 @@ class WalletConnectService extends ChangeNotifier {
 
   final List<String> activeSessions = [];
   final List<WalletSessionInfo> _sessionInfos = [];
+  final TransactionDispatcher _dispatcher;
 
   SignClient? _client;
   String _status = 'disconnected';
@@ -1362,14 +1369,18 @@ class WalletConnectService extends ChangeNotifier {
         completer.completeError(wrappedError);
       }
       _lastErrorDebug = 'approve failed: ${wrappedError.message}';
+      final WalletConnectRequestStatus failureStatus =
+          wrappedError.isRejected
+              ? WalletConnectRequestStatus.rejected
+              : WalletConnectRequestStatus.error;
       _emitRequestEvent(
-        status: WalletConnectRequestStatus.error,
+        status: failureStatus,
         request: request,
         error: wrappedError.message,
       );
       _recordActivity(
         method: request.method,
-        status: WalletConnectRequestStatus.error,
+        status: failureStatus,
         summary: wrappedError.message,
         chainId: request.chainId,
         requestId: request.requestId,
@@ -1494,17 +1505,44 @@ class WalletConnectService extends ChangeNotifier {
     txParams['chainId'] ??=
         '0x${network.chainIdNumeric.toRadixString(16)}';
 
-    try {
-      final hash = await walletApi.sendTransactionOnNetwork(txParams, network);
-      if (hash == null || hash.isEmpty) {
-        throw WalletConnectRequestException('Failed to send transaction');
-      }
-      return hash;
-    } catch (error) {
-      if (error is WalletConnectRequestException) {
-        rethrow;
-      }
-      throw WalletConnectRequestException('$error');
+    final DispatchResult dispatchResult = await _dispatcher.sendTransaction(
+      request: request,
+      txParams: txParams,
+      network: network,
+    );
+
+    switch (dispatchResult.status) {
+      case DispatchStatus.ok:
+      case DispatchStatus.alreadyBroadcast:
+        final String? hash = dispatchResult.txHash;
+        if (hash == null || hash.isEmpty) {
+          throw WalletConnectRequestException(
+            'Transaction hash unavailable after broadcast.',
+          );
+        }
+        return hash;
+      case DispatchStatus.mismatchNonce:
+        throw WalletConnectRequestException(
+          dispatchResult.errorMessage ??
+              'Outdated request. Please request again.',
+          isRejected: true,
+        );
+      case DispatchStatus.staleNonce:
+        throw WalletConnectRequestException(
+          dispatchResult.errorMessage ??
+              'Transaction was already sent. Nonce already used.',
+          isRejected: true,
+        );
+      case DispatchStatus.underpricedReplacement:
+        throw WalletConnectRequestException(
+          dispatchResult.errorMessage ??
+              'Network rejected transaction: gas price too low for replacement.',
+          isRejected: true,
+        );
+      case DispatchStatus.rpcError:
+        throw WalletConnectRequestException(
+          dispatchResult.errorMessage ?? 'Failed to send transaction.',
+        );
     }
   }
 
