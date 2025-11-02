@@ -39,7 +39,7 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => WalletConnectPairPage(service: _manager.service),
+        builder: (_) => const WalletConnectPairPage(),
       ),
     );
   }
