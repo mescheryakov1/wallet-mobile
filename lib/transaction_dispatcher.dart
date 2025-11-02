@@ -198,14 +198,101 @@ class TransactionDispatcher {
           txHash: signed.hash,
         );
       }
+      if (lower.contains('nonce too low') ||
+          lower.contains('replacement transaction underpriced')) {
+        return _retryWithFreshNonce(
+          request: request,
+          originalTx: transaction,
+          network: network,
+          walletAddress: walletAddress,
+          nonceKey: nonceKey,
+          originalMessage: message,
+          bumpFees: lower.contains('replacement transaction underpriced'),
+        );
+      }
+      return DispatchResult(
+        status: DispatchStatus.rpcError,
+        errorMessage: message,
+      );
+    }
+  }
+
+  Future<DispatchResult> _retryWithFreshNonce({
+    required WalletConnectPendingRequest request,
+    required Map<String, dynamic> originalTx,
+    required NetworkConfig network,
+    required EthereumAddress walletAddress,
+    required String nonceKey,
+    required String originalMessage,
+    required bool bumpFees,
+  }) async {
+    final BigInt? refreshedNonce =
+        await walletApi.getPendingNonce(network, walletAddress);
+    if (refreshedNonce == null) {
+      _nextNoncePerChainAndAddress.remove(nonceKey);
+      return DispatchResult(
+        status:
+            bumpFees ? DispatchStatus.underpricedReplacement : DispatchStatus.staleNonce,
+        errorMessage: originalMessage,
+      );
+    }
+
+    _nextNoncePerChainAndAddress[nonceKey] = refreshedNonce;
+    final Map<String, dynamic> retryTx =
+        Map<String, dynamic>.from(originalTx)..['nonce'] = _encodeQuantity(refreshedNonce);
+    if (bumpFees) {
+      _bumpGasParameters(retryTx);
+    }
+
+    SignedTransactionDetails? retrySigned;
+    try {
+      retrySigned = await walletApi.signTransactionForNetwork(
+        retryTx,
+        network,
+      );
+    } catch (error) {
+      return DispatchResult(
+        status: DispatchStatus.rpcError,
+        errorMessage: '$error',
+      );
+    }
+
+    if (retrySigned == null) {
+      return const DispatchResult(
+        status: DispatchStatus.rpcError,
+        errorMessage: 'Failed to sign transaction.',
+      );
+    }
+
+    try {
+      final String? broadcastHash = await walletApi.broadcastSignedTransaction(
+        retrySigned.rawTransaction,
+        network,
+      );
+      final String hashToUse =
+          (broadcastHash == null || broadcastHash.isEmpty)
+              ? retrySigned.hash
+              : broadcastHash;
+      _inFlightTxByRequestId[request.requestId] = hashToUse;
+      _nextNoncePerChainAndAddress[nonceKey] = refreshedNonce + BigInt.one;
+      return DispatchResult(
+        status: DispatchStatus.ok,
+        txHash: hashToUse,
+      );
+    } catch (error) {
+      final String message = error.toString();
+      final String lower = message.toLowerCase();
+      if (lower.contains('already known')) {
+        final String hashToUse = retrySigned.hash;
+        _inFlightTxByRequestId[request.requestId] = hashToUse;
+        _nextNoncePerChainAndAddress[nonceKey] = refreshedNonce + BigInt.one;
+        return DispatchResult(
+          status: DispatchStatus.ok,
+          txHash: hashToUse,
+        );
+      }
       if (lower.contains('nonce too low')) {
-        final BigInt? refreshed =
-            await walletApi.getPendingNonce(network, walletAddress);
-        if (refreshed != null) {
-          _nextNoncePerChainAndAddress[nonceKey] = refreshed;
-        } else {
-          _nextNoncePerChainAndAddress.remove(nonceKey);
-        }
+        _nextNoncePerChainAndAddress[nonceKey] = refreshedNonce + BigInt.one;
         return DispatchResult(
           status: DispatchStatus.staleNonce,
           errorMessage: message,
@@ -222,6 +309,33 @@ class TransactionDispatcher {
         errorMessage: message,
       );
     }
+  }
+
+  void _bumpGasParameters(Map<String, dynamic> transaction) {
+    final BigInt? gasPrice = _parseQuantity(transaction['gasPrice']);
+    if (gasPrice != null) {
+      final BigInt bumped = _increaseByTenPercent(gasPrice);
+      transaction['gasPrice'] = _encodeQuantity(bumped);
+    }
+    final BigInt? maxFeePerGas = _parseQuantity(transaction['maxFeePerGas']);
+    if (maxFeePerGas != null) {
+      final BigInt bumped = _increaseByTenPercent(maxFeePerGas);
+      transaction['maxFeePerGas'] = _encodeQuantity(bumped);
+    }
+    final BigInt? maxPriorityFeePerGas =
+        _parseQuantity(transaction['maxPriorityFeePerGas']);
+    if (maxPriorityFeePerGas != null) {
+      final BigInt bumped = _increaseByTenPercent(maxPriorityFeePerGas);
+      transaction['maxPriorityFeePerGas'] = _encodeQuantity(bumped);
+    }
+  }
+
+  BigInt _increaseByTenPercent(BigInt value) {
+    final BigInt bumped = (value * BigInt.from(110)) ~/ BigInt.from(100);
+    if (bumped == value) {
+      return value + BigInt.one;
+    }
+    return bumped;
   }
 
   String _nonceKey(String chainId, EthereumAddress address) {

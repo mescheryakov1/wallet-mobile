@@ -872,54 +872,26 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
       return null;
     }
 
-    final String normalizedKey =
-        privateKey.startsWith('0x') ? privateKey.substring(2) : privateKey;
-    final EthPrivateKey credentials = EthPrivateKey.fromHex(normalizedKey);
-
-    final dynamic toValue = transaction['to'];
-    EthereumAddress? to;
-    if (toValue is String && toValue.isNotEmpty) {
-      to = EthereumAddress.fromHex(toValue);
-    }
-
-    final BigInt? valueQuantity = _parseQuantity(transaction['value']);
-    final BigInt? gasQuantity = _parseQuantity(transaction['gas']);
-    final BigInt? gasPriceQuantity = _parseQuantity(transaction['gasPrice']);
-    final BigInt? maxFeePerGasQuantity =
-        _parseQuantity(transaction['maxFeePerGas']);
-    final BigInt? maxPriorityFeePerGasQuantity =
-        _parseQuantity(transaction['maxPriorityFeePerGas']);
-    final BigInt? nonceQuantity = _parseQuantity(transaction['nonce']);
-
-    final dynamic dataValue = transaction['data'];
-    Uint8List? data;
-    if (dataValue is String && dataValue.isNotEmpty) {
-      data = _decodeHexData(dataValue);
-    }
-
-    final Transaction tx = Transaction(
+    final Transaction tx = _transactionFromMap(
+      transaction,
       from: currentWallet.address,
-      to: to,
-      value:
-          valueQuantity != null ? EtherAmount.inWei(valueQuantity) : null,
-      gasPrice: gasPriceQuantity != null && maxFeePerGasQuantity == null
-          ? EtherAmount.inWei(gasPriceQuantity)
-          : null,
-      maxGas: _bigIntToInt(gasQuantity),
-      nonce: _bigIntToInt(nonceQuantity),
-      data: data,
-      maxFeePerGas: maxFeePerGasQuantity != null
-          ? EtherAmount.inWei(maxFeePerGasQuantity)
-          : null,
-      maxPriorityFeePerGas: maxPriorityFeePerGasQuantity != null
-          ? EtherAmount.inWei(maxPriorityFeePerGasQuantity)
-          : null,
     );
 
-    final Uint8List signed = await credentials.signTransaction(
-      tx,
-      chainId: network.chainIdNumeric,
+    final Uint8List signed = await _withClientForRpc(
+      network.rpcUrl,
+      (client) async {
+        final String normalizedKey =
+            privateKey.startsWith('0x') ? privateKey.substring(2) : privateKey;
+        final EthPrivateKey credentials = EthPrivateKey.fromHex(normalizedKey);
+        return client.signTransaction(
+          credentials,
+          tx,
+          chainId: network.chainIdNumeric,
+          fetchChainIdFromNetworkId: false,
+        );
+      },
     );
+
     final String hash = '0x${bytesToHex(keccak256(signed))}';
     return SignedTransactionDetails(
       rawTransaction: signed,
@@ -965,49 +937,16 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
       return null;
     }
 
+    final Transaction tx = _transactionFromMap(
+      transaction,
+      from: currentWallet.address,
+    );
+
     return _withClientForRpc(rpcUrl, (client) async {
       final privateKey = currentWallet.privateKey;
       final normalizedKey =
           privateKey.startsWith('0x') ? privateKey.substring(2) : privateKey;
       final credentials = EthPrivateKey.fromHex(normalizedKey);
-      final toValue = transaction['to'];
-      EthereumAddress? to;
-      if (toValue is String && toValue.isNotEmpty) {
-        to = EthereumAddress.fromHex(toValue);
-      }
-
-      final valueQuantity = _parseQuantity(transaction['value']);
-      final gasQuantity = _parseQuantity(transaction['gas']);
-      final gasPriceQuantity = _parseQuantity(transaction['gasPrice']);
-      final maxFeePerGasQuantity = _parseQuantity(transaction['maxFeePerGas']);
-      final maxPriorityFeePerGasQuantity =
-          _parseQuantity(transaction['maxPriorityFeePerGas']);
-      final nonceQuantity = _parseQuantity(transaction['nonce']);
-
-      final dataValue = transaction['data'];
-      Uint8List? data;
-      if (dataValue is String && dataValue.isNotEmpty) {
-        data = _decodeHexData(dataValue);
-      }
-
-      final tx = Transaction(
-        from: currentWallet.address,
-        to: to,
-        value: valueQuantity != null ? EtherAmount.inWei(valueQuantity) : null,
-        gasPrice: gasPriceQuantity != null && maxFeePerGasQuantity == null
-            ? EtherAmount.inWei(gasPriceQuantity)
-            : null,
-        maxGas: _bigIntToInt(gasQuantity),
-        nonce: _bigIntToInt(nonceQuantity),
-        data: data,
-        maxFeePerGas: maxFeePerGasQuantity != null
-            ? EtherAmount.inWei(maxFeePerGasQuantity)
-            : null,
-        maxPriorityFeePerGas: maxPriorityFeePerGasQuantity != null
-            ? EtherAmount.inWei(maxPriorityFeePerGasQuantity)
-            : null,
-      );
-
       final txHash = await client.sendTransaction(
         credentials,
         tx,
@@ -1015,6 +954,53 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
       );
       return txHash;
     });
+  }
+
+  Transaction _transactionFromMap(
+    Map<String, dynamic> transaction, {
+    required EthereumAddress from,
+  }) {
+    final dynamic toValue = transaction['to'];
+    EthereumAddress? to;
+    if (toValue is String && toValue.isNotEmpty) {
+      to = EthereumAddress.fromHex(toValue);
+    }
+
+    final BigInt? valueQuantity = _parseQuantity(transaction['value']);
+    final BigInt? gasQuantity =
+        _parseQuantity(transaction['gas'] ?? transaction['gasLimit']);
+    final BigInt? gasPriceQuantity = _parseQuantity(transaction['gasPrice']);
+    final BigInt? maxFeePerGasQuantity =
+        _parseQuantity(transaction['maxFeePerGas']);
+    final BigInt? maxPriorityFeePerGasQuantity =
+        _parseQuantity(transaction['maxPriorityFeePerGas']);
+    final BigInt? nonceQuantity = _parseQuantity(transaction['nonce']);
+
+    final dynamic dataValue = transaction['data'];
+    Uint8List? data;
+    if (dataValue is String && dataValue.isNotEmpty) {
+      data = _decodeHexData(dataValue);
+    } else if (dataValue is Uint8List) {
+      data = dataValue;
+    }
+
+    return Transaction(
+      from: from,
+      to: to,
+      value: valueQuantity != null ? EtherAmount.inWei(valueQuantity) : null,
+      gasPrice: gasPriceQuantity != null && maxFeePerGasQuantity == null
+          ? EtherAmount.inWei(gasPriceQuantity)
+          : null,
+      maxGas: _bigIntToInt(gasQuantity),
+      nonce: _bigIntToInt(nonceQuantity),
+      data: data,
+      maxFeePerGas: maxFeePerGasQuantity != null
+          ? EtherAmount.inWei(maxFeePerGasQuantity)
+          : null,
+      maxPriorityFeePerGas: maxPriorityFeePerGasQuantity != null
+          ? EtherAmount.inWei(maxPriorityFeePerGasQuantity)
+          : null,
+    );
   }
 
   BigInt? _parseQuantity(dynamic value) {
