@@ -59,7 +59,10 @@ class _WalletConnectRequestPopupState
   Widget build(BuildContext context) {
     final WalletConnectPendingRequest request = widget.entry.request;
     final String method = request.method;
-    final String chainLabel = request.chainId ?? 'unknown chain';
+    final bool isSessionProposal = method == 'session_proposal';
+    final String chainLabel = isSessionProposal
+        ? _sessionChainLabel(request)
+        : (request.chainId ?? 'unknown chain');
     final ThemeData theme = Theme.of(context);
     final bool isPending =
         widget.entry.status == WalletConnectRequestStatus.pending;
@@ -150,6 +153,8 @@ class _WalletConnectRequestPopupState
         return 'Transaction request';
       case 'personal_sign':
         return 'Signature request';
+      case 'session_proposal':
+        return 'Connection request';
       default:
         return method;
     }
@@ -164,6 +169,8 @@ class _WalletConnectRequestPopupState
         return _buildPersonalSignDetails(theme, request);
       case 'eth_sendTransaction':
         return _buildTransactionDetails(theme, request);
+      case 'session_proposal':
+        return _buildSessionProposalDetails(theme, request);
       default:
         return <Widget>[
           Text(
@@ -219,6 +226,83 @@ class _WalletConnectRequestPopupState
       const SizedBox(height: 4),
       Text('Nonce: $nonce', style: theme.textTheme.bodySmall),
     ];
+  }
+
+  List<Widget> _buildSessionProposalDetails(
+    ThemeData theme,
+    WalletConnectPendingRequest request,
+  ) {
+    final Map<String, dynamic> data = _asMap(request.params);
+    final Map<String, dynamic>? metadata =
+        data['metadata'] as Map<String, dynamic>?;
+    final List<dynamic>? chains = data['chains'] as List<dynamic>?;
+    final List<dynamic>? methods = data['methods'] as List<dynamic>?;
+    final List<dynamic>? events = data['events'] as List<dynamic>?;
+    final List<dynamic>? accounts = data['accounts'] as List<dynamic>?;
+
+    final List<Widget> rows = <Widget>[];
+    if (metadata != null) {
+      final String name = metadata['name']?.toString() ?? 'Unknown dApp';
+      rows.add(Text('dApp: $name', style: theme.textTheme.bodySmall));
+      final String? url = metadata['url']?.toString();
+      if (url != null && url.isNotEmpty) {
+        rows
+          ..add(const SizedBox(height: 4))
+          ..add(Text('URL: $url', style: theme.textTheme.bodySmall));
+      }
+      final String? description = metadata['description']?.toString();
+      if (description != null && description.isNotEmpty) {
+        rows
+          ..add(const SizedBox(height: 4))
+          ..add(Text(description, style: theme.textTheme.bodySmall));
+      }
+    }
+
+    rows
+      ..add(const SizedBox(height: 4))
+      ..add(Text('Chains: ${_formatList(chains)}',
+          style: theme.textTheme.bodySmall))
+      ..add(const SizedBox(height: 4))
+      ..add(Text('Methods: ${_formatList(methods)}',
+          style: theme.textTheme.bodySmall))
+      ..add(const SizedBox(height: 4))
+      ..add(Text('Events: ${_formatList(events)}',
+          style: theme.textTheme.bodySmall));
+
+    if (accounts != null && accounts.isNotEmpty) {
+      rows
+        ..add(const SizedBox(height: 4))
+        ..add(Text('Accounts: ${_formatList(accounts)}',
+            style: theme.textTheme.bodySmall));
+    }
+
+    return rows;
+  }
+
+  String _sessionChainLabel(WalletConnectPendingRequest request) {
+    final Map<String, dynamic> data = _asMap(request.params);
+    final List<dynamic>? chains = data['chains'] as List<dynamic>?;
+    if (chains == null || chains.isEmpty) {
+      return 'session';
+    }
+    return chains.join(', ');
+  }
+
+  Map<String, dynamic> _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) {
+      return value;
+    }
+    if (value is Map) {
+      return value.map((key, dynamic val) => MapEntry(key.toString(), val));
+    }
+    return <String, dynamic>{};
+  }
+
+  String _formatList(List<dynamic>? values) {
+    if (values == null || values.isEmpty) {
+      return '—';
+    }
+    return values.map((dynamic value) => value.toString()).join(', ');
   }
 
   List<dynamic> _asList(dynamic params) {

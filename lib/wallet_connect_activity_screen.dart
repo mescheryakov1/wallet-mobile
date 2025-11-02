@@ -66,6 +66,7 @@ class _ActivityTile extends StatelessWidget {
         break;
     }
     final bool isPending = entry.status == WalletConnectRequestStatus.pending;
+    final bool isSessionProposal = request.method == 'session_proposal';
 
     return Card(
       child: Padding(
@@ -90,12 +91,17 @@ class _ActivityTile extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Text('Chain: ${request.chainId ?? 'unknown'}'),
+            if (isSessionProposal)
+              Text('Chains: ${_sessionChainSummary(request)}')
+            else
+              Text('Chain: ${request.chainId ?? 'unknown'}'),
             const SizedBox(height: 4),
             if (request.method == 'personal_sign')
               Text(_buildPersonalSignSummary(request))
             else if (request.method == 'eth_sendTransaction')
               Text(_buildTransactionSummary(request))
+            else if (isSessionProposal)
+              Text(_buildSessionProposalSummary(request))
             else
               Text('${request.params}'),
             const SizedBox(height: 8),
@@ -161,11 +167,47 @@ class _ActivityTile extends StatelessWidget {
     return 'To: $to\nValue: $value';
   }
 
+  String _buildSessionProposalSummary(WalletConnectPendingRequest request) {
+    final Map<String, dynamic> data = _asMap(request.params);
+    final Map<String, dynamic>? metadata =
+        data['metadata'] as Map<String, dynamic>?;
+    final String name = metadata?['name']?.toString() ?? 'Unknown dApp';
+    final String chains = _formatList(data['chains'] as List<dynamic>?);
+    final String methods = _formatList(data['methods'] as List<dynamic>?);
+    return 'dApp: $name\nChains: $chains\nMethods: $methods';
+  }
+
   List<dynamic> _asList(dynamic params) {
     if (params is List) {
       return params;
     }
     return <dynamic>[];
+  }
+
+  Map<String, dynamic> _asMap(dynamic params) {
+    if (params is Map<String, dynamic>) {
+      return params;
+    }
+    if (params is Map) {
+      return params.map((key, dynamic value) => MapEntry(key.toString(), value));
+    }
+    return <String, dynamic>{};
+  }
+
+  String _sessionChainSummary(WalletConnectPendingRequest request) {
+    final Map<String, dynamic> data = _asMap(request.params);
+    final List<dynamic>? chains = data['chains'] as List<dynamic>?;
+    if (chains == null || chains.isEmpty) {
+      return '—';
+    }
+    return chains.join(', ');
+  }
+
+  String _formatList(List<dynamic>? values) {
+    if (values == null || values.isEmpty) {
+      return '—';
+    }
+    return values.map((dynamic value) => value.toString()).join(', ');
   }
 
   Map<String, dynamic> _asTx(dynamic params) {

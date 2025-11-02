@@ -168,7 +168,10 @@ class _WalletConnectRequestBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final method = entry.request.method;
-    final chainLabel = entry.request.chainId ?? 'unknown chain';
+    final bool isSessionProposal = method == 'session_proposal';
+    final String chainLabel = isSessionProposal
+        ? _sessionChainLabel(entry.request)
+        : (entry.request.chainId ?? 'unknown chain');
     final subtitle = '$method • $chainLabel';
     final List<Widget> details = _buildDetails(theme);
     final bool isPending =
@@ -264,6 +267,8 @@ class _WalletConnectRequestBanner extends StatelessWidget {
         return _buildPersonalSignDetails(theme);
       case 'eth_sendTransaction':
         return _buildTransactionDetails(theme);
+      case 'session_proposal':
+        return _buildSessionProposalDetails(theme);
       default:
         return <Widget>[
           Text(
@@ -313,11 +318,85 @@ class _WalletConnectRequestBanner extends StatelessWidget {
     ];
   }
 
+  List<Widget> _buildSessionProposalDetails(ThemeData theme) {
+    final Map<String, dynamic> data = _asMap(entry.request.params);
+    final Map<String, dynamic>? metadata =
+        data['metadata'] as Map<String, dynamic>?;
+    final List<dynamic>? chains = data['chains'] as List<dynamic>?;
+    final List<dynamic>? methods = data['methods'] as List<dynamic>?;
+    final List<dynamic>? events = data['events'] as List<dynamic>?;
+    final List<dynamic>? accounts = data['accounts'] as List<dynamic>?;
+
+    final List<Widget> rows = <Widget>[];
+    if (metadata != null) {
+      final String name = metadata['name']?.toString() ?? 'Unknown dApp';
+      rows.add(Text('dApp: $name', style: theme.textTheme.bodySmall));
+      final String? url = metadata['url']?.toString();
+      if (url != null && url.isNotEmpty) {
+        rows
+          ..add(const SizedBox(height: 4))
+          ..add(Text('URL: $url', style: theme.textTheme.bodySmall));
+      }
+      final String? description = metadata['description']?.toString();
+      if (description != null && description.isNotEmpty) {
+        rows
+          ..add(const SizedBox(height: 4))
+          ..add(Text(description, style: theme.textTheme.bodySmall));
+      }
+    }
+
+    rows
+      ..add(const SizedBox(height: 4))
+      ..add(Text('Chains: ${_formatList(chains)}',
+          style: theme.textTheme.bodySmall))
+      ..add(const SizedBox(height: 4))
+      ..add(Text('Methods: ${_formatList(methods)}',
+          style: theme.textTheme.bodySmall))
+      ..add(const SizedBox(height: 4))
+      ..add(Text('Events: ${_formatList(events)}',
+          style: theme.textTheme.bodySmall));
+
+    if (accounts != null && accounts.isNotEmpty) {
+      rows
+        ..add(const SizedBox(height: 4))
+        ..add(Text('Accounts: ${_formatList(accounts)}',
+            style: theme.textTheme.bodySmall));
+    }
+
+    return rows;
+  }
+
   List<dynamic> _asList(dynamic params) {
     if (params is List) {
       return params;
     }
     return <dynamic>[];
+  }
+
+  Map<String, dynamic> _asMap(dynamic params) {
+    if (params is Map<String, dynamic>) {
+      return params;
+    }
+    if (params is Map) {
+      return params.map((key, dynamic value) => MapEntry(key.toString(), value));
+    }
+    return <String, dynamic>{};
+  }
+
+  String _sessionChainLabel(WalletConnectPendingRequest request) {
+    final Map<String, dynamic> data = _asMap(request.params);
+    final List<dynamic>? chains = data['chains'] as List<dynamic>?;
+    if (chains == null || chains.isEmpty) {
+      return 'session';
+    }
+    return chains.join(', ');
+  }
+
+  String _formatList(List<dynamic>? values) {
+    if (values == null || values.isEmpty) {
+      return '—';
+    }
+    return values.map((dynamic value) => value.toString()).join(', ');
   }
 
   Map<String, dynamic> _asTx(dynamic params) {

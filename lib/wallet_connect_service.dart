@@ -103,6 +103,8 @@ class WalletConnectService extends ChangeNotifier {
   bool _handlersRegistered = false;
   String? _lastRequestDebug;
   String? _lastErrorDebug;
+  bool _pairingInProgress = false;
+  String? _pairingError;
   WalletConnectPendingRequest? _pendingRequest;
   Completer<String>? _pendingRequestCompleter;
   WalletConnectActivityEntry? _lastActivityEntry;
@@ -117,6 +119,8 @@ class WalletConnectService extends ChangeNotifier {
   String get status => _status;
   String? get lastRequestDebug => _lastRequestDebug;
   String? get lastErrorDebug => _lastErrorDebug;
+  bool get pairingInProgress => _pairingInProgress;
+  String? get pairingError => _pairingError;
   WalletConnectPendingRequest? get pendingRequest => _pendingRequest;
   List<WalletSessionInfo> getActiveSessions() =>
       List<WalletSessionInfo>.unmodifiable(_sessionInfos);
@@ -684,33 +688,44 @@ class WalletConnectService extends ChangeNotifier {
     );
   }
 
-  Future<void> pairUri(String uri) async {
+  Future<void> startPairing(String uri) async {
     final client = _client;
     if (client == null) {
       _status = 'not initialized';
       notifyListeners();
-      return;
+      throw StateError('WalletConnect not initialized');
     }
 
-    final trimmed = uri.trim();
+    final String trimmed = uri.trim();
     if (trimmed.isEmpty) {
-      return;
+      throw ArgumentError('WalletConnect URI is empty');
     }
+    if (!trimmed.startsWith('wc:')) {
+      throw ArgumentError('Invalid WalletConnect URI');
+    }
+
+    Uri parsed;
+    try {
+      parsed = Uri.parse(trimmed);
+    } catch (error) {
+      throw ArgumentError('Invalid WalletConnect URI: $error');
+    }
+
+    _pairingError = null;
+    _pairingInProgress = true;
+    _status = 'pairing';
+    notifyListeners();
 
     try {
-      _status = 'pairing';
-      notifyListeners();
-
-      final parsed = Uri.parse(trimmed);
       await client.pair(uri: parsed);
-
-      _status = 'paired';
     } catch (error, stackTrace) {
+      _pairingInProgress = false;
+      _pairingError = '$error';
       _status = 'error: $error';
       debugPrint('WalletConnect pair failed: $error\n$stackTrace');
+      notifyListeners();
+      rethrow;
     }
-
-    notifyListeners();
   }
 
   Future<void> disconnectSession(String topic) async {
@@ -738,6 +753,8 @@ class WalletConnectService extends ChangeNotifier {
     if (client == null || event == null) {
       return;
     }
+
+    _pairingInProgress = false;
 
     debugLastProposalLog =
         'RAW event=${event.toString()} | params=${event.params.toString()}';
@@ -768,6 +785,7 @@ class WalletConnectService extends ChangeNotifier {
     }) async {
       debugLastError = debugMessage;
       _lastErrorDebug = debugMessage;
+      _pairingError = debugMessage;
       notifyListeners();
       await client.reject(id: event.id, reason: reason);
     }
@@ -951,26 +969,76 @@ class WalletConnectService extends ChangeNotifier {
       return;
     }
 
-    try {
-      await client.approve(
-        id: event.id,
-        namespaces: namespaces,
-      );
-    } catch (error, stackTrace) {
-      debugLastError = 'approve threw: $error';
-      _lastErrorDebug = 'approve failed: $error';
-      debugPrint('approve exception: $error\n$stackTrace');
-      notifyListeners();
-      return;
-    }
+    _pairingInProgress = false;
 
-    _status = 'connected';
+    final metadata = proposal.proposer.metadata;
+    final Set<String> chainSet = <String>{};
+    final Set<String> accountSet = <String>{};
+    final Set<String> methodSet = <String>{};
+    final Set<String> eventSet = <String>{};
+
+    namespaces.forEach((_, namespace) {
+      methodSet.addAll(namespace.methods.map((m) => m.toLowerCase()));
+      eventSet.addAll(namespace.events.map((e) => e.toLowerCase()));
+      for (final String account in namespace.accounts) {
+        accountSet.add(account);
+        final List<String> parts = account.split(':');
+        if (parts.length >= 2) {
+          chainSet.add('${parts[0]}:${parts[1]}');
+        }
+      }
+    });
+
+    _cancelPendingCompleterIfActive();
+    _pendingRequestCompleter = Completer<String>();
+
+    final Map<String, Object?> proposalDetails = <String, Object?>{
+      'proposalId': event.id,
+      'namespaces': namespaces,
+      'metadata': <String, Object?>{
+        'name': metadata.name,
+        'description': metadata.description,
+        'url': metadata.url,
+        'icons': metadata.icons,
+      },
+      'chains': chainSet.toList(growable: false),
+      'methods': methodSet.toList(growable: false),
+      'events': eventSet.toList(growable: false),
+      'accounts': accountSet.toList(growable: false),
+      'approvedDetails': approvedDetails,
+      'pairingTopic': proposal.pairingTopic,
+    };
+
+    final WalletConnectPendingRequest request = WalletConnectPendingRequest(
+      topic: proposal.pairingTopic ?? '',
+      requestId: event.id,
+      method: 'session_proposal',
+      params: proposalDetails,
+      chainId: chainSet.isNotEmpty ? chainSet.first : null,
+    );
+
+    _pendingRequest = request;
+    _lastRequestDebug =
+        'session_proposal from ${metadata.name} chains=${chainSet.join(', ')}';
     debugLastProposalLog =
-        'approved namespaces=${approvedDetails.join(' | ')} accounts=${namespaces.values.map((ns) => ns.accounts).toList()}';
+        'proposal pending namespaces=${approvedDetails.join(' | ')}';
     debugLastError = '';
     _lastErrorDebug = '';
+
+    _emitRequestEvent(
+      status: WalletConnectRequestStatus.pending,
+      request: request,
+    );
+    _recordActivity(
+      method: 'session_proposal',
+      status: WalletConnectRequestStatus.pending,
+      summary: 'Connection request from ${metadata.name}',
+      chainId: request.chainId,
+      requestId: request.requestId,
+    );
+
+    _status = 'proposal received';
     notifyListeners();
-    unawaited(_refreshActiveSessions());
   }
 
   void _onSessionConnect(SessionConnect? event) {
@@ -1331,6 +1399,25 @@ class WalletConnectService extends ChangeNotifier {
     }
     _processingRequestIds.add(requestId);
 
+    if (request.method == 'session_proposal') {
+      final client = _client;
+      if (client != null) {
+        final Map<String, dynamic> data = _asStringKeyedMap(request.params);
+        final int proposalId =
+            (data['proposalId'] as int?) ?? request.requestId;
+        try {
+          await client.reject(
+            id: proposalId,
+            reason: Errors.getSdkError(Errors.USER_REJECTED_CHAINS),
+          );
+        } catch (error, stackTrace) {
+          debugPrint('WalletConnect proposal reject failed: $error\n$stackTrace');
+        }
+      }
+      _pairingInProgress = false;
+      _pairingError = reason ?? 'User rejected the request.';
+    }
+
     final String message = reason ?? 'User rejected the request.';
     if (!completer.isCompleted) {
       completer.completeError(
@@ -1459,6 +1546,8 @@ class WalletConnectService extends ChangeNotifier {
 
   Future<String> _resolvePendingRequest(WalletConnectPendingRequest request) {
     switch (request.method) {
+      case 'session_proposal':
+        return _approveSessionProposal(request);
       case 'personal_sign':
         return _signPersonalMessage(request);
       case 'eth_sendTransaction':
@@ -1527,6 +1616,46 @@ class WalletConnectService extends ChangeNotifier {
     }
 
     return signature;
+  }
+
+  Future<String> _approveSessionProposal(
+    WalletConnectPendingRequest request,
+  ) async {
+    final client = _client;
+    if (client == null) {
+      throw WalletConnectRequestException('WalletConnect not initialized');
+    }
+
+    final Map<String, dynamic> data = _asStringKeyedMap(request.params);
+    final Map<String, Namespace>? namespaces =
+        (data['namespaces'] as Map?)?.cast<String, Namespace>();
+    if (namespaces == null || namespaces.isEmpty) {
+      throw WalletConnectRequestException('Missing namespaces for proposal');
+    }
+
+    final int proposalId =
+        (data['proposalId'] as int?) ?? request.requestId;
+
+    try {
+      await client.approve(
+        id: proposalId,
+        namespaces: namespaces,
+      );
+    } catch (error, stackTrace) {
+      debugPrint('approve proposal failed: $error\n$stackTrace');
+      throw WalletConnectRequestException('Failed to approve proposal: $error');
+    }
+
+    _pairingInProgress = false;
+    _pairingError = null;
+    debugLastProposalLog =
+        'approved namespaces=${namespaces.keys.join(' | ')} accounts=${namespaces.values.map((ns) => ns.accounts).toList()}';
+    debugLastError = '';
+    _lastErrorDebug = '';
+    _status = 'connected';
+    notifyListeners();
+    unawaited(_refreshActiveSessions());
+    return 'session approved';
   }
 
   Future<String> _sendAndBroadcastTransaction(
@@ -1787,6 +1916,16 @@ class WalletConnectService extends ChangeNotifier {
       return List<dynamic>.from(value);
     }
     return <dynamic>[value];
+  }
+
+  Map<String, dynamic> _asStringKeyedMap(dynamic value) {
+    if (value is Map<String, dynamic>) {
+      return value;
+    }
+    if (value is Map) {
+      return value.map((key, dynamic val) => MapEntry(key.toString(), val));
+    }
+    return <String, dynamic>{};
   }
 
   Uint8List _messageToBytes(String message) {

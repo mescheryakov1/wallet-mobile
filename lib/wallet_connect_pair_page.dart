@@ -43,7 +43,7 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
     });
 
     try {
-      await _service.pairUri(uri);
+      await _service.startPairing(uri);
       if (mounted) {
         Navigator.of(context).pop();
       }

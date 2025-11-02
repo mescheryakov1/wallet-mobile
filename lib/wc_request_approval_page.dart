@@ -213,6 +213,8 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
         return _buildPersonalSignDetails(request);
       case 'eth_sendTransaction':
         return _buildEthSendTransactionDetails(request);
+      case 'session_proposal':
+        return _buildSessionProposalDetails(request);
       default:
         return <Widget>[
           const Text('Parameters:'),
@@ -312,6 +314,63 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
     return rows;
   }
 
+  List<Widget> _buildSessionProposalDetails(
+    WalletConnectPendingRequest request,
+  ) {
+    final data = _asMap(request.params);
+    final metadata = data['metadata'] as Map<String, dynamic>?;
+    final chains = _formatList(data['chains'] as List<dynamic>?);
+    final methods = _formatList(data['methods'] as List<dynamic>?);
+    final events = _formatList(data['events'] as List<dynamic>?);
+    final accounts = _formatList(data['accounts'] as List<dynamic>?);
+
+    final rows = <Widget>[];
+    if (metadata != null) {
+      rows
+        ..add(const Text('dApp'))
+        ..add(const SizedBox(height: 4))
+        ..add(SelectableText(metadata['name']?.toString() ?? 'Unknown dApp'))
+        ..add(const SizedBox(height: 12));
+      final url = metadata['url']?.toString();
+      if (url != null && url.isNotEmpty) {
+        rows
+          ..add(const Text('URL'))
+          ..add(const SizedBox(height: 4))
+          ..add(SelectableText(url))
+          ..add(const SizedBox(height: 12));
+      }
+      final description = metadata['description']?.toString();
+      if (description != null && description.isNotEmpty) {
+        rows
+          ..add(const Text('Description'))
+          ..add(const SizedBox(height: 4))
+          ..add(Text(description))
+          ..add(const SizedBox(height: 12));
+      }
+    }
+
+    rows
+      ..add(_detailRow('Chains', chains))
+      ..add(const SizedBox(height: 8))
+      ..add(_detailRow('Methods', methods))
+      ..add(const SizedBox(height: 8))
+      ..add(_detailRow('Events', events));
+
+    if (accounts.isNotEmpty && accounts != '—') {
+      rows
+        ..add(const SizedBox(height: 8))
+        ..add(_detailRow('Accounts', accounts));
+    }
+
+    rows
+      ..add(const SizedBox(height: 12))
+      ..add(const Text('Raw parameters'))
+      ..add(const SizedBox(height: 4))
+      ..add(SelectableText('${request.params}'));
+
+    return rows;
+  }
+
   List<dynamic> _asList(dynamic value) {
     if (value == null) {
       return const [];
@@ -355,6 +414,23 @@ class _WcRequestApprovalPageState extends State<WcRequestApprovalPage> {
       orElse: () => null,
     );
     return fallback is String ? fallback : null;
+  }
+
+  Map<String, dynamic> _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) {
+      return value;
+    }
+    if (value is Map) {
+      return value.map((key, dynamic val) => MapEntry(key.toString(), val));
+    }
+    return <String, dynamic>{};
+  }
+
+  String _formatList(List<dynamic>? values) {
+    if (values == null || values.isEmpty) {
+      return '—';
+    }
+    return values.map((dynamic value) => value.toString()).join(', ');
   }
 
   String? _decodeHexToUtf8(String message) {
