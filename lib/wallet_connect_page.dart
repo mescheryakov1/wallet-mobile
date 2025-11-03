@@ -85,7 +85,6 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
     WalletConnectSessionInfo session,
   ) {
     final service = _manager.service;
-    final peer = service.currentPeerMetadata;
     final chains = service.getApprovedChains();
     final methods = service.getApprovedMethods();
     final activity = service.lastActivityEntry;
@@ -94,7 +93,7 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _buildConnectedDappSection(context, peer, session),
+        _buildConnectedDappSection(context, session),
         const SizedBox(height: 16),
         _buildPermissionsSection(context, chains, methods),
         const SizedBox(height: 16),
@@ -161,18 +160,14 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
 
   Widget _buildConnectedDappSection(
     BuildContext context,
-    WalletConnectPeerMetadata? peer,
     WalletConnectSessionInfo session,
   ) {
     final String sessionName = session.dappName ?? '';
-    final String displayName = (peer?.name?.isNotEmpty ?? false)
-        ? peer!.name!
-        : (sessionName.isNotEmpty ? sessionName : 'Connected dApp');
-    final description = peer?.description;
-    final url = peer?.url ?? session.dappUrl;
-    final iconUrl = peer?.icons != null && peer!.icons!.isNotEmpty
-        ? peer.icons!.first
-        : session.iconUrl;
+    final String displayName =
+        sessionName.isNotEmpty ? sessionName : 'Connected dApp';
+    final String? description = session.peerDescription;
+    final String? url = session.dappUrl;
+    final String? iconUrl = session.iconUrl;
 
     return _buildSectionCard(
       context,

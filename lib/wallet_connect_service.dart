@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:walletconnect_flutter_v2/apis/sign_api/models/session_models.dart';
 import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart';
 import 'package:web3dart/web3dart.dart';
 
@@ -135,9 +136,6 @@ class WalletConnectService extends ChangeNotifier {
   bool get hasActiveSession => _activeSession != null;
   WalletConnectSessionInfo? get primarySessionInfo =>
       _sessionInfos.isEmpty ? null : _sessionInfos.first;
-  WalletConnectPeerMetadata? get currentPeerMetadata =>
-      primarySessionInfo?.peer;
-
   List<String> getApprovedChains() {
     final session = primarySessionInfo;
     if (session == null) {
@@ -1095,7 +1093,7 @@ class WalletConnectService extends ChangeNotifier {
     SessionData session, {
     WalletConnectSessionInfo? previousInfo,
   }) {
-    final info = WalletConnectSessionInfo.fromSession(session);
+    final info = WalletConnectSessionInfo.fromSessionData(session);
     if (previousInfo == null) {
       return info;
     }
