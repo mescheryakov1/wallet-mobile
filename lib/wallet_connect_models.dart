@@ -1,4 +1,7 @@
+// ignore_for_file: public_member_api_docs
+
 import 'package:flutter/foundation.dart';
+import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart' as wc;
 
 /// Represents the status of a WalletConnect JSON-RPC request.
 enum WalletConnectRequestStatus {
@@ -10,134 +13,227 @@ enum WalletConnectRequestStatus {
   error,
 }
 
-/// Basic metadata describing the connected dApp.
 @immutable
 class WalletConnectPeerMetadata {
-  WalletConnectPeerMetadata({
-    required this.name,
-    this.description,
+  const WalletConnectPeerMetadata({
+    this.name,
     this.url,
-    this.icons = const <String>[],
+    this.icons,
+    this.description,
   });
 
-  final String name;
-  final String? description;
+  final String? name;
   final String? url;
-  final List<String> icons;
+  final List<String>? icons;
+  final String? description;
 
-  /// Convenience getter returning the first icon URL if present.
-  String? get iconUrl => icons.isNotEmpty ? icons.first : null;
-}
-
-/// Snapshot of an approved WalletConnect session in the app.
-@immutable
-class WalletSessionInfo {
-  WalletSessionInfo({
-    required this.topic,
-    required this.dappName,
-    required this.chains,
-    required this.accounts,
-    required this.methods,
-    required this.events,
-    this.dappUrl,
-    this.iconUrl,
-    this.dappDescription,
-    this.expiry,
-    this.approvedAt,
-    this.peer,
-    this.isActive = true,
-  });
-
-  factory WalletSessionInfo.fromJson(Map<String, dynamic> json) {
-    return WalletSessionInfo(
-      topic: json['topic'] as String? ?? '',
-      dappName: json['dappName'] as String? ?? '',
-      dappUrl: json['dappUrl'] as String?,
-      iconUrl: json['iconUrl'] as String?,
-      dappDescription: json['dappDescription'] as String?,
-      chains: (json['chains'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
-          const <String>[],
-      accounts: (json['accounts'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
-          const <String>[],
-      methods: (json['methods'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
-          const <String>[],
-      events: (json['events'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
-          const <String>[],
-      expiry: json['expiry'] as int?,
-      approvedAt: json['approvedAt'] as int?,
-      isActive: json['isActive'] as bool? ?? true,
+  factory WalletConnectPeerMetadata.fromMetadata(wc.ConnectionMetadata? metadata) {
+    if (metadata == null) {
+      return const WalletConnectPeerMetadata();
+    }
+    return WalletConnectPeerMetadata(
+      name: metadata.name,
+      url: metadata.url,
+      icons: metadata.icons,
+      description: metadata.description,
     );
   }
 
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'name': name,
+        'url': url,
+        'icons': icons,
+        'description': description,
+      };
+}
+
+@immutable
+class WalletConnectSessionInfo {
+  const WalletConnectSessionInfo({
+    required this.topic,
+    required this.namespaces,
+    required this.accounts,
+    required this.peer,
+    required this.createdAt,
+    this.updatedAt,
+  });
+
   final String topic;
-  final String dappName;
-  final List<String> chains;
+  final Map<String, wc.Namespace> namespaces;
   final List<String> accounts;
-  final List<String> methods;
-  final List<String> events;
-  final String? dappUrl;
-  final String? iconUrl;
-  final String? dappDescription;
-  final int? expiry;
-  final int? approvedAt;
-  final WalletConnectPeerMetadata? peer;
-  final bool isActive;
+  final WalletConnectPeerMetadata peer;
+  final DateTime createdAt;
+  final DateTime? updatedAt;
+
+  factory WalletConnectSessionInfo.fromSession(wc.SessionData session) {
+    final List<String> accs = <String>[];
+    session.namespaces.forEach((_, ns) => accs.addAll(ns.accounts));
+    return WalletConnectSessionInfo(
+      topic: session.topic,
+      namespaces: session.namespaces,
+      accounts: accs,
+      peer: WalletConnectPeerMetadata.fromMetadata(session.peer.metadata),
+      createdAt: DateTime.fromMillisecondsSinceEpoch(
+        session.timestamp ?? DateTime.now().millisecondsSinceEpoch,
+      ),
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  factory WalletConnectSessionInfo.fromJson(Map<String, dynamic> json) {
+    final Map<String, dynamic> namespacesJson =
+        (json['namespaces'] as Map?)?.cast<String, dynamic>() ??
+            const <String, dynamic>{};
+    final Map<String, wc.Namespace> namespaces = <String, wc.Namespace>{};
+    namespacesJson.forEach((String key, dynamic value) {
+      final Map<String, dynamic> namespaceMap =
+          (value as Map?)?.cast<String, dynamic>() ??
+              const <String, dynamic>{};
+      namespaces[key] = wc.Namespace(
+        accounts: (namespaceMap['accounts'] as List?)
+                ?.whereType<String>()
+                .toList(growable: false) ??
+            const <String>[],
+        methods: (namespaceMap['methods'] as List?)
+                ?.whereType<String>()
+                .toList(growable: false) ??
+            const <String>[],
+        events: (namespaceMap['events'] as List?)
+                ?.whereType<String>()
+                .toList(growable: false) ??
+            const <String>[],
+      );
+    });
+
+    final List<String> accountsFromJson = (json['accounts'] as List?)
+            ?.whereType<String>()
+            .toList(growable: false) ??
+        const <String>[];
+
+    if (namespaces.isEmpty &&
+        (json.containsKey('chains') || json.containsKey('methods'))) {
+      final List<String> methods = (json['methods'] as List?)
+              ?.whereType<String>()
+              .toList(growable: false) ??
+          const <String>[];
+      final List<String> events = (json['events'] as List?)
+              ?.whereType<String>()
+              .toList(growable: false) ??
+          const <String>[];
+      namespaces['eip155'] = wc.Namespace(
+        accounts: accountsFromJson,
+        methods: methods,
+        events: events,
+      );
+    }
+
+    final Map<String, dynamic>? peerJson =
+        (json['peer'] as Map?)?.cast<String, dynamic>();
+    return WalletConnectSessionInfo(
+      topic: json['topic'] as String? ?? '',
+      namespaces: namespaces,
+      accounts: accountsFromJson,
+      peer: WalletConnectPeerMetadata(
+        name: peerJson?['name'] as String?,
+        url: peerJson?['url'] as String?,
+        icons: (peerJson?['icons'] as List?)
+            ?.whereType<String>()
+            .toList(growable: false),
+        description: peerJson?['description'] as String?,
+      ),
+      createdAt: DateTime.fromMillisecondsSinceEpoch(
+        json['createdAt'] as int? ?? DateTime.now().millisecondsSinceEpoch,
+      ),
+      updatedAt: json['updatedAt'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(json['updatedAt'] as int)
+          : null,
+    );
+  }
+
+  WalletConnectSessionInfo copyWith({
+    Map<String, wc.Namespace>? namespaces,
+    List<String>? accounts,
+    WalletConnectPeerMetadata? peer,
+    DateTime? updatedAt,
+  }) {
+    return WalletConnectSessionInfo(
+      topic: topic,
+      namespaces: namespaces ?? this.namespaces,
+      accounts: accounts ?? this.accounts,
+      peer: peer ?? this.peer,
+      createdAt: createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
       'topic': topic,
-      'dappName': dappName,
-      if (dappUrl != null) 'dappUrl': dappUrl,
-      if (iconUrl != null) 'iconUrl': iconUrl,
-      if (dappDescription != null) 'dappDescription': dappDescription,
-      'chains': chains,
+      'namespaces': namespaces.map(
+        (String key, wc.Namespace value) => MapEntry<String, dynamic>(
+          key,
+          <String, dynamic>{
+            'accounts': value.accounts,
+            'methods': value.methods,
+            'events': value.events,
+          },
+        ),
+      ),
       'accounts': accounts,
+      'chains': chains,
       'methods': methods,
       'events': events,
-      if (expiry != null) 'expiry': expiry,
-      if (approvedAt != null) 'approvedAt': approvedAt,
-      'isActive': isActive,
+      'dappName': dappName,
+      'dappUrl': dappUrl,
+      'iconUrl': iconUrl,
+      'peer': peer.toJson(),
+      'createdAt': createdAt.millisecondsSinceEpoch,
+      if (updatedAt != null) 'updatedAt': updatedAt!.millisecondsSinceEpoch,
     };
   }
 
-  WalletSessionInfo copyWith({
-    String? topic,
-    String? dappName,
-    List<String>? chains,
-    List<String>? accounts,
-    List<String>? methods,
-    List<String>? events,
-    String? dappUrl,
-    String? iconUrl,
-    String? dappDescription,
-    int? expiry,
-    int? approvedAt,
-    WalletConnectPeerMetadata? peer,
-    bool? isActive,
-  }) {
-    return WalletSessionInfo(
-      topic: topic ?? this.topic,
-      dappName: dappName ?? this.dappName,
-      chains: chains ?? this.chains,
-      accounts: accounts ?? this.accounts,
-      methods: methods ?? this.methods,
-      events: events ?? this.events,
-      dappUrl: dappUrl ?? this.dappUrl,
-      iconUrl: iconUrl ?? this.iconUrl,
-      dappDescription: dappDescription ?? this.dappDescription,
-      expiry: expiry ?? this.expiry,
-      approvedAt: approvedAt ?? this.approvedAt,
-      peer: peer ?? this.peer,
-      isActive: isActive ?? this.isActive,
-    );
+  List<String> get chains {
+    final Set<String> chains = <String>{};
+    for (final wc.Namespace namespace in namespaces.values) {
+      for (final String account in namespace.accounts) {
+        final String? chain = _extractChainFromAccount(account);
+        if (chain != null) {
+          chains.add(chain);
+        }
+      }
+    }
+    return chains.toList(growable: false);
+  }
+
+  List<String> get methods {
+    final Set<String> methods = <String>{};
+    for (final wc.Namespace namespace in namespaces.values) {
+      methods.addAll(namespace.methods);
+    }
+    return methods.toList(growable: false);
+  }
+
+  List<String> get events {
+    final Set<String> events = <String>{};
+    for (final wc.Namespace namespace in namespaces.values) {
+      events.addAll(namespace.events);
+    }
+    return events.toList(growable: false);
+  }
+
+  String? get dappName => peer.name;
+
+  String? get dappUrl => peer.url;
+
+  String? get iconUrl =>
+      (peer.icons != null && peer.icons!.isNotEmpty) ? peer.icons!.first : null;
+
+  static String? _extractChainFromAccount(String account) {
+    final List<String> parts = account.split(':');
+    if (parts.length < 2) {
+      return null;
+    }
+    return '${parts[0]}:${parts[1]}'.toLowerCase();
   }
 }
 
@@ -189,7 +285,7 @@ class WalletConnectActivityEntry {
 
 @immutable
 class WalletConnectPendingRequest {
-  WalletConnectPendingRequest({
+  const WalletConnectPendingRequest({
     required this.topic,
     required this.requestId,
     required this.method,
@@ -206,7 +302,7 @@ class WalletConnectPendingRequest {
 
 @immutable
 class WalletConnectRequestEvent {
-  WalletConnectRequestEvent({
+  const WalletConnectRequestEvent({
     required this.request,
     required this.status,
     this.result,
@@ -223,7 +319,7 @@ class WalletConnectRequestEvent {
 
 @immutable
 class WalletConnectRequestLogEntry {
-  WalletConnectRequestLogEntry({
+  const WalletConnectRequestLogEntry({
     required this.request,
     required this.status,
     this.result,

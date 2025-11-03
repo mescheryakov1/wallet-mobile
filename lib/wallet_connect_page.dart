@@ -80,7 +80,10 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
     );
   }
 
-  Widget _buildConnectedBody(BuildContext context, WalletSessionInfo session) {
+  Widget _buildConnectedBody(
+    BuildContext context,
+    WalletConnectSessionInfo session,
+  ) {
     final service = _manager.service;
     final peer = service.currentPeerMetadata;
     final chains = service.getApprovedChains();
@@ -159,14 +162,17 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
   Widget _buildConnectedDappSection(
     BuildContext context,
     WalletConnectPeerMetadata? peer,
-    WalletSessionInfo session,
+    WalletConnectSessionInfo session,
   ) {
-    final name = (peer?.name ?? session.dappName).isNotEmpty
-        ? (peer?.name ?? session.dappName)
-        : 'Connected dApp';
+    final String sessionName = session.dappName ?? '';
+    final String displayName = (peer?.name?.isNotEmpty ?? false)
+        ? peer!.name!
+        : (sessionName.isNotEmpty ? sessionName : 'Connected dApp');
     final description = peer?.description;
     final url = peer?.url ?? session.dappUrl;
-    final iconUrl = peer?.iconUrl ?? session.iconUrl;
+    final iconUrl = peer?.icons != null && peer!.icons!.isNotEmpty
+        ? peer.icons!.first
+        : session.iconUrl;
 
     return _buildSectionCard(
       context,
@@ -175,14 +181,14 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildDappAvatar(iconUrl, name),
+            _buildDappAvatar(iconUrl, displayName),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    name,
+                    displayName,
                     style: Theme.of(context)
                         .textTheme
                         .titleMedium

@@ -59,7 +59,7 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
       builder: (BuildContext context, Widget? _) {
         final bool isPairing = _service.isPairing;
         final String? error = _service.pairingError;
-        final WalletSessionInfo? session = _service.primarySessionInfo;
+        final WalletConnectSessionInfo? session = _service.primarySessionInfo;
         return Scaffold(
           appBar: AppBar(
             title: const Text('Connect via URI'),
@@ -138,13 +138,13 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
 
   Widget _buildConnectedBody(
     BuildContext context,
-    WalletSessionInfo session,
+    WalletConnectSessionInfo session,
   ) {
     final WalletConnectPeerMetadata? peer = _service.currentPeerMetadata;
     final List<String> chains = _service.getApprovedChains();
     final List<String> methods = _service.getApprovedMethods();
     final String? displayUrl = peer?.url ?? session.dappUrl;
-    final String? displayDescription = peer?.description ?? session.dappDescription;
+    final String? displayDescription = peer?.description;
     final List<Widget> subtitleChildren = <Widget>[];
     if (displayUrl != null && displayUrl.isNotEmpty) {
       subtitleChildren.add(Text(displayUrl));
@@ -173,7 +173,7 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
           [
             ListTile(
               leading: _buildPeerAvatar(peer),
-              title: Text(peer?.name ?? session.dappName),
+              title: Text(peer?.name ?? session.dappName ?? 'Connected dApp'),
               subtitle: subtitleWidget,
             ),
           ],
@@ -238,7 +238,7 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
   }
 
   Widget _buildPeerAvatar(WalletConnectPeerMetadata? peer) {
-    final iconUrl = peer?.icons.isNotEmpty == true ? peer!.icons.first : null;
+    final iconUrl = (peer?.icons?.isNotEmpty ?? false) ? peer!.icons!.first : null;
     if (iconUrl == null || iconUrl.isEmpty) {
       return const CircleAvatar(child: Icon(Icons.link));
     }

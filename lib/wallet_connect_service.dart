@@ -94,7 +94,7 @@ class WalletConnectService extends ChangeNotifier {
   final String projectId;
 
   final List<String> activeSessions = [];
-  final List<WalletSessionInfo> _sessionInfos = [];
+  final List<WalletConnectSessionInfo> _sessionInfos = [];
 
   SignClient? _client;
   String _status = 'disconnected';
@@ -128,33 +128,15 @@ class WalletConnectService extends ChangeNotifier {
   WalletConnectPendingRequest? get pendingSessionProposal =>
       _pendingSessionProposal;
   WalletConnectPendingRequest? get pendingRequest => _pendingRequest;
-  List<WalletSessionInfo> getActiveSessions() =>
-      List<WalletSessionInfo>.unmodifiable(_sessionInfos);
+  List<WalletConnectSessionInfo> getActiveSessions() =>
+      List<WalletConnectSessionInfo>.unmodifiable(_sessionInfos);
   bool get isConnected => _sessionInfos.isNotEmpty;
   WalletConnectSessionInfo? get activeSession => _activeSession;
   bool get hasActiveSession => _activeSession != null;
-  WalletSessionInfo? get primarySessionInfo =>
+  WalletConnectSessionInfo? get primarySessionInfo =>
       _sessionInfos.isEmpty ? null : _sessionInfos.first;
-  WalletConnectPeerMetadata? get currentPeerMetadata {
-    final session = primarySessionInfo;
-    if (session == null) {
-      return null;
-    }
-    if (session.peer != null) {
-      return session.peer;
-    }
-    final icons = <String>[];
-    final iconUrl = session.iconUrl;
-    if (iconUrl != null && iconUrl.isNotEmpty) {
-      icons.add(iconUrl);
-    }
-    return WalletConnectPeerMetadata(
-      name: session.dappName,
-      description: session.dappDescription,
-      url: session.dappUrl,
-      icons: icons,
-    );
-  }
+  WalletConnectPeerMetadata? get currentPeerMetadata =>
+      primarySessionInfo?.peer;
 
   List<String> getApprovedChains() {
     final session = primarySessionInfo;
@@ -587,7 +569,7 @@ class WalletConnectService extends ChangeNotifier {
       }
       final infos = decoded
           .whereType<Map<String, dynamic>>()
-          .map(WalletSessionInfo.fromJson)
+          .map(WalletConnectSessionInfo.fromJson)
           .toList(growable: false);
       _setSessionInfos(infos);
     } catch (error) {
@@ -607,7 +589,7 @@ class WalletConnectService extends ChangeNotifier {
     }
   }
 
-  void _setSessionInfos(List<WalletSessionInfo> infos) {
+  void _setSessionInfos(List<WalletConnectSessionInfo> infos) {
     _sessionInfos
       ..clear()
       ..addAll(infos);
@@ -617,6 +599,7 @@ class WalletConnectService extends ChangeNotifier {
       ..addAll(
         infos
             .map((info) => info.dappName)
+            .whereType<String>()
             .where((name) => name.isNotEmpty),
       );
     if (infos.isEmpty) {
@@ -626,7 +609,7 @@ class WalletConnectService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _resetNonceCacheForSessions(List<WalletSessionInfo> infos) {
+  void _resetNonceCacheForSessions(List<WalletConnectSessionInfo> infos) {
     final NonceManager manager = NonceManager.instance;
     if (infos.isEmpty) {
       final EthereumAddress? address = walletApi.getAddress();
@@ -642,7 +625,7 @@ class WalletConnectService extends ChangeNotifier {
       return;
     }
 
-    for (final WalletSessionInfo info in infos) {
+    for (final WalletConnectSessionInfo info in infos) {
       for (final String account in info.accounts) {
         final List<String> parts = account.split(':');
         if (parts.length < 3) {
@@ -1092,7 +1075,7 @@ class WalletConnectService extends ChangeNotifier {
       return;
     }
 
-    final previous = <String, WalletSessionInfo>{
+    final previous = <String, WalletConnectSessionInfo>{
       for (final info in _sessionInfos) info.topic: info,
     };
     final sessions = client.sessions.getAll();
@@ -1100,7 +1083,7 @@ class WalletConnectService extends ChangeNotifier {
         .map(
           (session) => _sessionDataToInfo(
             session,
-            approvedAt: previous[session.topic]?.approvedAt,
+            previousInfo: previous[session.topic],
           ),
         )
         .toList(growable: false);
@@ -1108,47 +1091,16 @@ class WalletConnectService extends ChangeNotifier {
     await _persistSessions();
   }
 
-  WalletSessionInfo _sessionDataToInfo(
+  WalletConnectSessionInfo _sessionDataToInfo(
     SessionData session, {
-    int? approvedAt,
+    WalletConnectSessionInfo? previousInfo,
   }) {
-    final metadata = session.peer.metadata;
-    final iconUrl =
-        metadata.icons.isNotEmpty ? metadata.icons.first : null;
-    final peerMetadata = WalletConnectPeerMetadata(
-      name: metadata.name,
-      description: metadata.description,
-      url: metadata.url,
-      icons: metadata.icons,
-    );
-
-    final Set<String> chainIds = <String>{};
-    final List<String> accounts = <String>[];
-    final Set<String> methods = <String>{};
-    final Set<String> events = <String>{};
-
-    session.namespaces.forEach((_, namespace) {
-      accounts.addAll(namespace.accounts);
-      final namespaceChains = _extractChainsFromNamespace(namespace);
-      chainIds.addAll(namespaceChains);
-      methods.addAll(namespace.methods);
-      events.addAll(namespace.events);
-    });
-
-    return WalletSessionInfo(
-      topic: session.topic,
-      dappName: metadata.name,
-      dappUrl: metadata.url,
-      iconUrl: iconUrl,
-      dappDescription: metadata.description,
-      chains: chainIds.toList(growable: false),
-      accounts: accounts.toList(growable: false),
-      methods: methods.map((value) => value.toLowerCase()).toList(growable: false),
-      events: events.toList(growable: false),
-      expiry: session.expiry,
-      approvedAt: approvedAt ?? DateTime.now().millisecondsSinceEpoch,
-      peer: peerMetadata,
-      isActive: true,
+    final info = WalletConnectSessionInfo.fromSession(session);
+    if (previousInfo == null) {
+      return info;
+    }
+    return info.copyWith(
+      updatedAt: DateTime.now(),
     );
   }
 
