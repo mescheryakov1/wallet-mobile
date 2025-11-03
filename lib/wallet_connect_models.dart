@@ -3,6 +3,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:walletconnect_flutter_v2/apis/sign_api/models/session_models.dart'
     as wc;
+import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart'
+    show Namespace, PairingMetadata;
 
 /// Represents the lifecycle status of a WalletConnect request.
 enum WalletConnectRequestStatus {
@@ -24,7 +26,7 @@ enum WalletConnectActivityEntryType {
 
 @immutable
 class WalletConnectSessionInfo {
-  const WalletConnectSessionInfo({
+  WalletConnectSessionInfo({
     required this.topic,
     this.dappName,
     this.peerDescription,
@@ -47,9 +49,11 @@ class WalletConnectSessionInfo {
   final DateTime? updatedAt;
 
   factory WalletConnectSessionInfo.fromSessionData(wc.SessionData session) {
-    final wc.ConnectionMetadata metadata = session.peer.metadata;
+    final PairingMetadata metadata = session.peer.metadata;
     final List<String> collectedAccounts = <String>[];
-    session.namespaces.values.forEach(collectedAccounts.addAll);
+    for (final Namespace namespace in session.namespaces.values) {
+      collectedAccounts.addAll(namespace.accounts);
+    }
     final String? resolvedIcon =
         metadata.icons.isNotEmpty ? metadata.icons.first : null;
     return WalletConnectSessionInfo(
@@ -272,7 +276,7 @@ class WalletConnectActivityEntry {
 
 @immutable
 class WalletConnectPendingRequest {
-  const WalletConnectPendingRequest({
+  WalletConnectPendingRequest({
     required this.topic,
     required this.requestId,
     required this.method,
@@ -291,7 +295,7 @@ class WalletConnectPendingRequest {
 
 @immutable
 class WalletConnectRequestEvent {
-  const WalletConnectRequestEvent({
+  WalletConnectRequestEvent({
     required this.request,
     required this.status,
     this.result,
@@ -308,7 +312,7 @@ class WalletConnectRequestEvent {
 
 @immutable
 class WalletConnectRequestLogEntry {
-  const WalletConnectRequestLogEntry({
+  WalletConnectRequestLogEntry({
     required this.request,
     required this.status,
     this.result,
