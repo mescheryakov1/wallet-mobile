@@ -172,7 +172,7 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
           [
             ListTile(
               leading:
-                  _buildPeerAvatar(session.peerIcon, session.peerName),
+                  _buildPeerAvatar(session.iconUrl, session.dappName ?? ''),
               title: Text(session.dappName ?? 'Connected dApp'),
               subtitle: subtitleWidget,
             ),

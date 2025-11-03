@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:walletconnect_flutter_v2/apis/sign_api/models/session_models.dart'
     as wc;
 
-/// Represents the status of a WalletConnect JSON-RPC request.
+/// Represents the lifecycle status of a WalletConnect request.
 enum WalletConnectRequestStatus {
   pending,
   broadcasting,
@@ -14,16 +14,22 @@ enum WalletConnectRequestStatus {
   error,
 }
 
-@immutable
-class WalletConnectSessionInfo {
+/// High-level classification of WalletConnect activity entries.
+enum WalletConnectActivityEntryType {
+  sessionProposal,
+  personalSign,
+  ethSendTransaction,
+  other,
+}
+
 @immutable
 class WalletConnectSessionInfo {
   const WalletConnectSessionInfo({
     required this.topic,
-    required this.peerName,
-    this.peerUrl,
-    this.peerIcon,
+    this.dappName,
     this.peerDescription,
+    this.dappUrl,
+    this.iconUrl,
     required this.accounts,
     this.createdAt,
     required this.namespaces,
@@ -31,89 +37,45 @@ class WalletConnectSessionInfo {
   });
 
   final String topic;
-  final String peerName;
-  final String? peerUrl;
-  final String? peerIcon;
+  final String? dappName;
   final String? peerDescription;
+  final String? dappUrl;
+  final String? iconUrl;
   final List<String> accounts;
   final int? createdAt;
   final Map<String, wc.Namespace> namespaces;
   final DateTime? updatedAt;
 
   factory WalletConnectSessionInfo.fromSessionData(wc.SessionData session) {
-    final metadata = session.peer.metadata;
-    final List<String> accounts = <String>[];
-    session.namespaces.values.forEach(accounts.addAll);
-    final String? icon = metadata.icons.isNotEmpty ? metadata.icons.first : null;
+    final wc.ConnectionMetadata metadata = session.peer.metadata;
+    final List<String> collectedAccounts = <String>[];
+    session.namespaces.values.forEach(collectedAccounts.addAll);
+    final String? resolvedIcon =
+        metadata.icons.isNotEmpty ? metadata.icons.first : null;
     return WalletConnectSessionInfo(
       topic: session.topic,
-      peerName: metadata.name,
-      peerUrl: metadata.url,
-      peerIcon: icon,
+      dappName: metadata.name,
       peerDescription: metadata.description,
-      accounts: accounts,
+      dappUrl: metadata.url,
+      iconUrl: resolvedIcon,
+      accounts: List<String>.unmodifiable(collectedAccounts),
       createdAt: session.expiry,
       namespaces: session.namespaces,
       updatedAt: DateTime.now(),
     );
   }
 
-  WalletConnectSessionInfo copyWith({
-    String? peerName,
-    String? peerUrl,
-    String? peerIcon,
-    String? peerDescription,
-    List<String>? accounts,
-    int? createdAt,
-    Map<String, wc.Namespace>? namespaces,
-    DateTime? updatedAt,
-  }) {
-    return WalletConnectSessionInfo(
-      topic: topic,
-      peerName: peerName ?? this.peerName,
-      peerUrl: peerUrl ?? this.peerUrl,
-      peerIcon: peerIcon ?? this.peerIcon,
-      peerDescription: peerDescription ?? this.peerDescription,
-      accounts: accounts ?? this.accounts,
-      createdAt: createdAt ?? this.createdAt,
-      namespaces: namespaces ?? this.namespaces,
-      updatedAt: updatedAt ?? this.updatedAt,
-    );
-  }
-
-  Map<String, dynamic> toJson() {
-    return <String, dynamic>{
-      'topic': topic,
-      'peerName': peerName,
-      'peerUrl': peerUrl,
-      'peerIcon': peerIcon,
-      'peerDescription': peerDescription,
-      'accounts': accounts,
-      'namespaces': namespaces.map(
-        (String key, wc.Namespace value) => MapEntry<String, dynamic>(
-          key,
-          <String, dynamic>{
-            'accounts': value.accounts,
-            'methods': value.methods,
-            'events': value.events,
-          },
-        ),
-      ),
-      if (createdAt != null) 'createdAt': createdAt,
-      if (updatedAt != null) 'updatedAt': updatedAt!.millisecondsSinceEpoch,
-    };
-  }
-
   factory WalletConnectSessionInfo.fromJson(Map<String, dynamic> json) {
     final Map<String, dynamic> namespacesJson =
         (json['namespaces'] as Map?)?.cast<String, dynamic>() ??
             const <String, dynamic>{};
-    final Map<String, wc.Namespace> namespaces = <String, wc.Namespace>{};
+    final Map<String, wc.Namespace> parsedNamespaces =
+        <String, wc.Namespace>{};
     namespacesJson.forEach((String key, dynamic value) {
       final Map<String, dynamic> namespaceMap =
           (value as Map?)?.cast<String, dynamic>() ??
               const <String, dynamic>{};
-      namespaces[key] = wc.Namespace(
+      parsedNamespaces[key] = wc.Namespace(
         accounts: (namespaceMap['accounts'] as List?)
                 ?.whereType<String>()
                 .toList(growable: false) ??
@@ -131,38 +93,89 @@ class WalletConnectSessionInfo {
 
     final Map<String, dynamic>? legacyPeer =
         (json['peer'] as Map?)?.cast<String, dynamic>();
-    final String? resolvedName =
-        json['peerName'] as String? ?? json['dappName'] as String? ??
-            legacyPeer?['name'] as String?;
-    final String? resolvedUrl =
-        json['peerUrl'] as String? ?? json['dappUrl'] as String? ??
-            legacyPeer?['url'] as String?;
-    final List<String> legacyIcons =
-        (legacyPeer?['icons'] as List?)?.whereType<String>().toList() ??
-        const <String>[];
-    final String? resolvedIcon = json['peerIcon'] as String? ??
-        json['iconUrl'] as String? ??
-        (legacyIcons.isNotEmpty ? legacyIcons.first : null);
+    final String? resolvedName = json['dappName'] as String? ??
+        json['peerName'] as String? ??
+        legacyPeer?['name'] as String?;
     final String? resolvedDescription =
         json['peerDescription'] as String? ??
         legacyPeer?['description'] as String?;
+    final String? resolvedUrl = json['dappUrl'] as String? ??
+        json['peerUrl'] as String? ??
+        legacyPeer?['url'] as String?;
+    final List<String> legacyIcons =
+        (legacyPeer?['icons'] as List?)?.whereType<String>().toList() ??
+        const <String>[];
+    final String? resolvedIcon = json['iconUrl'] as String? ??
+        json['peerIcon'] as String? ??
+        (legacyIcons.isNotEmpty ? legacyIcons.first : null);
+
+    final List<String> storedAccounts = (json['accounts'] as List?)
+            ?.whereType<String>()
+            .toList(growable: false) ??
+        const <String>[];
 
     return WalletConnectSessionInfo(
       topic: json['topic'] as String? ?? '',
-      peerName: resolvedName ?? '',
-      peerUrl: resolvedUrl,
-      peerIcon: resolvedIcon,
+      dappName: resolvedName,
       peerDescription: resolvedDescription,
-      accounts: (json['accounts'] as List?)
-              ?.whereType<String>()
-              .toList(growable: false) ??
-          const <String>[],
+      dappUrl: resolvedUrl,
+      iconUrl: resolvedIcon,
+      accounts: List<String>.unmodifiable(storedAccounts),
       createdAt: json['createdAt'] as int?,
-      namespaces: namespaces,
+      namespaces: parsedNamespaces,
       updatedAt: json['updatedAt'] != null
           ? DateTime.fromMillisecondsSinceEpoch(json['updatedAt'] as int)
           : null,
     );
+  }
+
+  WalletConnectSessionInfo copyWith({
+    String? dappName,
+    String? peerDescription,
+    String? dappUrl,
+    String? iconUrl,
+    List<String>? accounts,
+    int? createdAt,
+    Map<String, wc.Namespace>? namespaces,
+    DateTime? updatedAt,
+  }) {
+    return WalletConnectSessionInfo(
+      topic: topic,
+      dappName: dappName ?? this.dappName,
+      peerDescription: peerDescription ?? this.peerDescription,
+      dappUrl: dappUrl ?? this.dappUrl,
+      iconUrl: iconUrl ?? this.iconUrl,
+      accounts: accounts ?? this.accounts,
+      createdAt: createdAt ?? this.createdAt,
+      namespaces: namespaces ?? this.namespaces,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'topic': topic,
+      'dappName': dappName,
+      'peerDescription': peerDescription,
+      'dappUrl': dappUrl,
+      'iconUrl': iconUrl,
+      'peerName': dappName, // legacy compatibility
+      'peerUrl': dappUrl,
+      'peerIcon': iconUrl,
+      'accounts': accounts,
+      'namespaces': namespaces.map(
+        (String key, wc.Namespace value) => MapEntry<String, dynamic>(
+          key,
+          <String, dynamic>{
+            'accounts': value.accounts,
+            'methods': value.methods,
+            'events': value.events,
+          },
+        ),
+      ),
+      if (createdAt != null) 'createdAt': createdAt,
+      if (updatedAt != null) 'updatedAt': updatedAt!.millisecondsSinceEpoch,
+    };
   }
 
   List<String> get chains {
@@ -194,11 +207,10 @@ class WalletConnectSessionInfo {
     return events.toList(growable: false);
   }
 
-  String? get dappName => peerName.isEmpty ? null : peerName;
-
-  String? get dappUrl => peerUrl;
-
-  String? get iconUrl => peerIcon;
+  String get displayName => dappName ?? '';
+  String? get peerName => dappName;
+  String? get peerUrl => dappUrl;
+  String? get peerIcon => iconUrl;
 
   static String? _extractChainFromAccount(String account) {
     final List<String> parts = account.split(':');
@@ -209,7 +221,6 @@ class WalletConnectSessionInfo {
   }
 }
 
-/// Lightweight record of the most recent WalletConnect action.
 @immutable
 class WalletConnectActivityEntry {
   WalletConnectActivityEntry({
@@ -220,6 +231,7 @@ class WalletConnectActivityEntry {
     this.chainId,
     this.result,
     this.error,
+    this.type = WalletConnectActivityEntryType.other,
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 
@@ -230,6 +242,7 @@ class WalletConnectActivityEntry {
   final String? chainId;
   final String? result;
   final String? error;
+  final WalletConnectActivityEntryType type;
   final DateTime timestamp;
 
   WalletConnectActivityEntry copyWith({
@@ -240,6 +253,7 @@ class WalletConnectActivityEntry {
     String? chainId,
     String? result,
     String? error,
+    WalletConnectActivityEntryType? type,
     DateTime? timestamp,
   }) {
     return WalletConnectActivityEntry(
@@ -250,6 +264,7 @@ class WalletConnectActivityEntry {
       chainId: chainId ?? this.chainId,
       result: result ?? this.result,
       error: error ?? this.error,
+      type: type ?? this.type,
       timestamp: timestamp ?? this.timestamp,
     );
   }
@@ -263,6 +278,7 @@ class WalletConnectPendingRequest {
     required this.method,
     required this.params,
     this.chainId,
+    this.type = WalletConnectActivityEntryType.other,
   });
 
   final String topic;
@@ -270,6 +286,7 @@ class WalletConnectPendingRequest {
   final String method;
   final dynamic params;
   final String? chainId;
+  final WalletConnectActivityEntryType type;
 }
 
 @immutable
@@ -297,6 +314,7 @@ class WalletConnectRequestLogEntry {
     this.result,
     this.error,
     this.isDismissed = false,
+    this.type = WalletConnectActivityEntryType.other,
     DateTime? timestamp,
     this.txHash,
   }) : timestamp = timestamp ?? DateTime.now();
@@ -307,6 +325,7 @@ class WalletConnectRequestLogEntry {
   final String? error;
   final DateTime timestamp;
   final bool isDismissed;
+  final WalletConnectActivityEntryType type;
   final String? txHash;
 
   WalletConnectRequestLogEntry copyWith({
@@ -315,6 +334,7 @@ class WalletConnectRequestLogEntry {
     String? error,
     DateTime? timestamp,
     bool? isDismissed,
+    WalletConnectActivityEntryType? type,
     String? txHash,
   }) {
     return WalletConnectRequestLogEntry(
@@ -324,6 +344,7 @@ class WalletConnectRequestLogEntry {
       error: error ?? this.error,
       timestamp: timestamp ?? this.timestamp,
       isDismissed: isDismissed ?? this.isDismissed,
+      type: type ?? this.type,
       txHash: txHash ?? this.txHash,
     );
   }
@@ -336,10 +357,11 @@ class WalletConnectRequestQueue extends ChangeNotifier {
   List<WalletConnectRequestLogEntry> get entries =>
       List<WalletConnectRequestLogEntry>.unmodifiable(_entries);
 
-  WalletConnectRequestLogEntry? getFirstPending() {
+  WalletConnectRequestLogEntry? get firstPendingLog {
     for (final WalletConnectRequestLogEntry entry in _entries) {
-      if (entry.status == WalletConnectRequestStatus.pending &&
-          !entry.isDismissed) {
+      if (!entry.isDismissed &&
+          (entry.status == WalletConnectRequestStatus.pending ||
+              entry.status == WalletConnectRequestStatus.broadcasting)) {
         return entry;
       }
     }
@@ -365,7 +387,7 @@ class WalletConnectRequestQueue extends ChangeNotifier {
     return null;
   }
 
-  void addOrUpdate(WalletConnectRequestLogEntry entry) {
+  void enqueue(WalletConnectRequestLogEntry entry) {
     final WalletConnectRequestLogEntry? existing =
         findById(entry.request.requestId);
     if (existing == null) {
@@ -380,10 +402,50 @@ class WalletConnectRequestQueue extends ChangeNotifier {
       _entries[index] = entry.copyWith(
         isDismissed: nextDismissed,
         txHash: entry.txHash ?? existing.txHash,
+        type: entry.type,
       );
     }
     notifyListeners();
   }
+
+  void addOrUpdate(WalletConnectRequestLogEntry entry) {
+    enqueue(entry);
+  }
+
+  void markApproved(int id, String resultHexOrTxHash) {
+    final WalletConnectRequestLogEntry? existing = findById(id);
+    if (existing == null) {
+      return;
+    }
+    final int index = _entries.indexOf(existing);
+    _entries[index] = existing.copyWith(
+      status: WalletConnectRequestStatus.approved,
+      result: resultHexOrTxHash,
+      isDismissed: existing.isDismissed,
+      txHash: resultHexOrTxHash,
+    );
+    notifyListeners();
+  }
+
+  void markRejected(int id, String errorMsg) {
+    final WalletConnectRequestLogEntry? existing = findById(id);
+    if (existing == null) {
+      return;
+    }
+    final int index = _entries.indexOf(existing);
+    _entries[index] = existing.copyWith(
+      status: WalletConnectRequestStatus.rejected,
+      error: errorMsg,
+    );
+    notifyListeners();
+  }
+
+  void remove(int id) {
+    _entries.removeWhere((entry) => entry.request.requestId == id);
+    notifyListeners();
+  }
+
+  WalletConnectRequestLogEntry? getFirstPending() => firstPendingLog;
 
   void dismiss(int requestId) {
     final WalletConnectRequestLogEntry? existing = findById(requestId);
