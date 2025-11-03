@@ -30,12 +30,12 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
 
   Future<void> _pair() async {
     final uri = _uriController.text.trim();
-    if (uri.isEmpty || _service.pairingInProgress) {
+    if (uri.isEmpty || _service.isPairing) {
       return;
     }
 
     try {
-      await _service.startPairing(uri);
+      await _service.connectFromUri(uri);
     } catch (error) {
       if (!mounted) {
         return;
@@ -57,7 +57,7 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
         ],
       ),
       builder: (BuildContext context, Widget? _) {
-        final bool isPairing = _service.pairingInProgress;
+        final bool isPairing = _service.isPairing;
         final String? error = _service.pairingError;
         final WalletSessionInfo? session = _service.primarySessionInfo;
         return Scaffold(

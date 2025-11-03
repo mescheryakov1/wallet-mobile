@@ -66,7 +66,12 @@ class WalletConnectManager extends ChangeNotifier {
     if (entry.status != WalletConnectRequestStatus.pending) {
       return;
     }
-    await service.approveRequest(requestId.toString());
+    final method = entry.request.method;
+    if (method == 'session_proposal') {
+      await service.approveSessionProposal(requestId.toString());
+    } else {
+      await service.approveRequest(requestId.toString());
+    }
   }
 
   Future<void> rejectRequest(int requestId) async {
@@ -77,7 +82,12 @@ class WalletConnectManager extends ChangeNotifier {
     if (entry.status != WalletConnectRequestStatus.pending) {
       return;
     }
-    await service.rejectRequest(requestId.toString());
+    final method = entry.request.method;
+    if (method == 'session_proposal') {
+      await service.rejectSessionProposal(requestId.toString());
+    } else {
+      await service.rejectRequest(requestId.toString());
+    }
   }
 
   void dismissRequest(int requestId) {

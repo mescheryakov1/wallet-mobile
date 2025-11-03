@@ -105,7 +105,10 @@ class WalletConnectService extends ChangeNotifier {
   String? _lastErrorDebug;
   bool _pairingInProgress = false;
   String? _pairingError;
+  String? lastError;
+  WalletConnectPendingRequest? _pendingSessionProposal;
   WalletConnectPendingRequest? _pendingRequest;
+  WalletConnectSessionInfo? _activeSession;
   Completer<String>? _pendingRequestCompleter;
   WalletConnectActivityEntry? _lastActivityEntry;
   final Set<int> _processingRequestIds = <int>{};
@@ -120,11 +123,16 @@ class WalletConnectService extends ChangeNotifier {
   String? get lastRequestDebug => _lastRequestDebug;
   String? get lastErrorDebug => _lastErrorDebug;
   bool get pairingInProgress => _pairingInProgress;
+  bool get isPairing => _pairingInProgress;
   String? get pairingError => _pairingError;
+  WalletConnectPendingRequest? get pendingSessionProposal =>
+      _pendingSessionProposal;
   WalletConnectPendingRequest? get pendingRequest => _pendingRequest;
   List<WalletSessionInfo> getActiveSessions() =>
       List<WalletSessionInfo>.unmodifiable(_sessionInfos);
   bool get isConnected => _sessionInfos.isNotEmpty;
+  WalletConnectSessionInfo? get activeSession => _activeSession;
+  bool get hasActiveSession => _activeSession != null;
   WalletSessionInfo? get primarySessionInfo =>
       _sessionInfos.isEmpty ? null : _sessionInfos.first;
   WalletConnectPeerMetadata? get currentPeerMetadata {
@@ -546,6 +554,9 @@ class WalletConnectService extends ChangeNotifier {
 
   void _clearPendingRequest() {
     if (_pendingRequest != null) {
+      if (identical(_pendingRequest, _pendingSessionProposal)) {
+        _pendingSessionProposal = null;
+      }
       _pendingRequest = null;
       notifyListeners();
     }
@@ -600,6 +611,7 @@ class WalletConnectService extends ChangeNotifier {
     _sessionInfos
       ..clear()
       ..addAll(infos);
+    _activeSession = infos.isNotEmpty ? infos.first : null;
     activeSessions
       ..clear()
       ..addAll(
@@ -688,7 +700,7 @@ class WalletConnectService extends ChangeNotifier {
     );
   }
 
-  Future<void> startPairing(String uri) async {
+  Future<void> connectFromUri(String uri) async {
     if (_client == null) {
       await initWalletConnect();
     }
@@ -716,21 +728,35 @@ class WalletConnectService extends ChangeNotifier {
     }
 
     _pairingError = null;
+    lastError = null;
+    _pendingSessionProposal = null;
     _pairingInProgress = true;
     _status = 'pairing';
     notifyListeners();
+
+    // Ensure the proposal listener is attached before pairing to avoid missing
+    // events on platforms that deliver them immediately.
+    try {
+      client.onSessionProposal.unsubscribe(_onSessionProposal);
+    } catch (_) {
+      // Ignored: unsubscribe may throw if the handler was not yet attached.
+    }
+    client.onSessionProposal.subscribe(_onSessionProposal);
 
     try {
       await client.pair(uri: parsed);
     } catch (error, stackTrace) {
       _pairingInProgress = false;
       _pairingError = '$error';
+      lastError = _pairingError;
       _status = 'error: $error';
       debugPrint('WalletConnect pair failed: $error\n$stackTrace');
       notifyListeners();
       rethrow;
     }
   }
+
+  Future<void> startPairing(String uri) => connectFromUri(uri);
 
   Future<void> disconnectSession(String topic) async {
     final client = _client;
@@ -1022,6 +1048,8 @@ class WalletConnectService extends ChangeNotifier {
     );
 
     _pendingRequest = request;
+    _pendingSessionProposal = request;
+    lastError = null;
     _lastRequestDebug =
         'session_proposal from ${metadata.name} chains=${chainSet.join(', ')}';
     debugLastProposalLog =
@@ -1382,6 +1410,20 @@ class WalletConnectService extends ChangeNotifier {
     String? reason,
   }) async {
     final int id = _parseRequestId(requestId);
+    final WalletConnectPendingRequest? request = _pendingRequest;
+    if (request != null &&
+        request.requestId == id &&
+        request.method == 'session_proposal') {
+      throw StateError('Use rejectSessionProposal for session proposals');
+    }
+    await _rejectPendingRequest(id, reason: reason);
+  }
+
+  Future<void> rejectSessionProposal(
+    String requestId, {
+    String? reason,
+  }) async {
+    final int id = _parseRequestId(requestId);
     await _rejectPendingRequest(id, reason: reason);
   }
 
@@ -1420,6 +1462,8 @@ class WalletConnectService extends ChangeNotifier {
       }
       _pairingInProgress = false;
       _pairingError = reason ?? 'User rejected the request.';
+      _pendingSessionProposal = null;
+      lastError = _pairingError;
     }
 
     final String message = reason ?? 'User rejected the request.';
@@ -1454,6 +1498,17 @@ class WalletConnectService extends ChangeNotifier {
   }
 
   Future<void> approveRequest(String requestId) async {
+    final int id = _parseRequestId(requestId);
+    final WalletConnectPendingRequest? request = _pendingRequest;
+    if (request != null &&
+        request.requestId == id &&
+        request.method == 'session_proposal') {
+      throw StateError('Use approveSessionProposal for session proposals');
+    }
+    await _approvePendingRequest(id);
+  }
+
+  Future<void> approveSessionProposal(String requestId) async {
     final int id = _parseRequestId(requestId);
     await _approvePendingRequest(id);
   }
@@ -1652,13 +1707,15 @@ class WalletConnectService extends ChangeNotifier {
 
     _pairingInProgress = false;
     _pairingError = null;
+    _pendingSessionProposal = null;
+    lastError = null;
     debugLastProposalLog =
         'approved namespaces=${namespaces.keys.join(' | ')} accounts=${namespaces.values.map((ns) => ns.accounts).toList()}';
     debugLastError = '';
     _lastErrorDebug = '';
     _status = 'connected';
     notifyListeners();
-    unawaited(_refreshActiveSessions());
+    await _refreshActiveSessions();
     return 'session approved';
   }
 
