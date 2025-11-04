@@ -1,13 +1,22 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:blockchain_utils/blockchain_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:web3dart/crypto.dart';
 import 'package:web3dart/web3dart.dart';
 
+import 'app_navigation.dart';
+import 'local_wallet_api.dart';
+import 'network_config.dart';
+import 'wallet_connect_activity_screen.dart';
+import 'wallet_connect_manager.dart';
+import 'wallet_connect_models.dart';
+import 'wallet_connect_page.dart';
 void main() {
   runApp(const WalletApp());
 }
@@ -24,6 +33,7 @@ class WalletApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
+      navigatorKey: appNavigatorKey,
       home: const WalletHomePage(),
     );
   }
@@ -47,6 +57,11 @@ class _WalletHomePageState extends State<WalletHomePage> {
     _controller = WalletController();
     _controller.addListener(_handleControllerUpdate);
     unawaited(_controller.initialize());
+    unawaited(
+      WalletConnectManager.instance.initialize(
+        walletApi: _controller,
+      ),
+    );
   }
 
   void _handleControllerUpdate() {
@@ -76,7 +91,7 @@ class _WalletHomePageState extends State<WalletHomePage> {
       return;
     }
 
-    final result = await _controller.sendTransaction(
+    final result = await _controller.sendManualTransaction(
       toAddress: recipient,
       amountInEth: amount,
     );
@@ -100,12 +115,60 @@ class _WalletHomePageState extends State<WalletHomePage> {
   @override
   Widget build(BuildContext context) {
     final wallet = _controller.wallet;
-    final balance = _controller.formattedBalance;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Ethereum Wallet'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.link),
+            tooltip: 'WalletConnect',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const WalletConnectPage(),
+                ),
+              );
+            },
+          ),
+          AnimatedBuilder(
+            animation: WalletConnectManager.instance,
+            builder: (BuildContext context, Widget? child) {
+              final bool hasPending =
+                  WalletConnectManager.instance.hasPendingRequests;
+              return Stack(
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  child!,
+                  if (hasPending)
+                    Positioned(
+                      right: 6,
+                      top: 6,
+                      child: Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+            child: IconButton(
+              icon: const Icon(Icons.history),
+              tooltip: 'WalletConnect activity',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const WalletConnectActivityScreen(),
+                  ),
+                );
+              },
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Обновить баланс',
@@ -126,66 +189,74 @@ class _WalletHomePageState extends State<WalletHomePage> {
           ),
         ],
       ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: ListView(
-            children: [
-              _NetworkSelector(
-                networks: NetworkConfiguration.supportedNetworks,
-                selected: _controller.selectedNetwork,
-                onChanged: (network) async {
-                  try {
-                    await _controller.updateNetwork(network);
-                  } catch (error) {
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Не удалось переключить сеть: $error'),
+      body: _buildMainContent(context),
+    );
+  }
+
+  Widget _buildMainContent(BuildContext context) {
+    final wallet = _controller.wallet;
+    final balance = _controller.formattedBalance;
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: ListView(
+          children: [
+            _NetworkSelector(
+              networks: NetworkConfiguration.supportedNetworks,
+              selected: _controller.selectedNetwork,
+              onChanged: (network) async {
+                try {
+                  await _controller.updateNetwork(network);
+                } catch (error) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Не удалось переключить сеть: $error'),
+                    ),
+                  );
+                }
+              },
+            ),
+            const SizedBox(height: 16),
+            if (_controller.isInitializing)
+              const Center(child: CircularProgressIndicator())
+            else if (wallet == null)
+              _EmptyWallet(
+                onCreate: _controller.createWallet,
+                isCreating: _controller.isCreatingWallet,
+                onImport: _controller.importWallet,
+                isImporting: _controller.isImportingWallet,
+              )
+            else ...[
+              WalletInfoCard(
+                wallet: wallet,
+                balance: balance,
+                isLoadingBalance: _controller.isRefreshingBalance,
+                onDelete: _controller.deleteWallet,
+                onViewTransactions: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => TransactionHistoryPage(
+                        address: wallet.address,
+                        network: _controller.selectedNetwork,
                       ),
-                    );
-                  }
+                    ),
+                  );
                 },
               ),
-              const SizedBox(height: 16),
-              if (_controller.isInitializing)
-                const Center(child: CircularProgressIndicator())
-              else if (wallet == null)
-                _EmptyWallet(
-                  onCreate: _controller.createWallet,
-                  isCreating: _controller.isCreatingWallet,
-                  onImport: _controller.importWallet,
-                  isImporting: _controller.isImportingWallet,
-                )
-              else ...[
-                WalletInfoCard(
-                  wallet: wallet,
-                  balance: balance,
-                  isLoadingBalance: _controller.isRefreshingBalance,
-                  onDelete: _controller.deleteWallet,
-                  onViewTransactions: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => TransactionHistoryPage(
-                          address: wallet.address,
-                          network: _controller.selectedNetwork,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(height: 24),
-                _TransactionForm(
-                  controller: this,
-                  isSending: _controller.isSending,
-                ),
-              ],
+              const SizedBox(height: 24),
+              _TransactionForm(
+                controller: this,
+                isSending: _controller.isSending,
+              ),
             ],
-          ),
+          ],
         ),
       ),
     );
   }
+
 }
 
 class _TransactionForm extends StatelessWidget {
@@ -611,7 +682,7 @@ class ClipboardHelper {
   }
 }
 
-class WalletController extends ChangeNotifier {
+class WalletController extends ChangeNotifier implements LocalWalletApi {
   WalletController({WalletStorage? storage})
     : _storage = storage ?? WalletStorage();
 
@@ -633,6 +704,296 @@ class WalletController extends ChangeNotifier {
   static const int defaultGasLimit = 21000;
   bool get isBusy =>
       isRefreshingBalance || isSending || isCreatingWallet || isImportingWallet;
+
+  @override
+  EthereumAddress? getAddress() => wallet?.address;
+
+  @override
+  int? getChainId() => selectedNetwork.chainId;
+
+  @override
+  Future<String?> signMessage(Uint8List messageBytes) async {
+    final currentWallet = wallet;
+    if (currentWallet == null) {
+      return null;
+    }
+
+    final privateKey = currentWallet.privateKey;
+    if (privateKey.isEmpty) {
+      return null;
+    }
+
+    final normalizedKey =
+        privateKey.startsWith('0x') ? privateKey.substring(2) : privateKey;
+    final ethKey = EthPrivateKey.fromHex(normalizedKey);
+    final signatureBytes =
+        await ethKey.signPersonalMessageToUint8List(messageBytes);
+    return _bytesToHex(signatureBytes);
+  }
+
+  String _bytesToHex(Uint8List bytes) {
+    final buffer = StringBuffer('0x');
+    for (final byte in bytes) {
+      buffer.write(byte.toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
+  }
+
+  @override
+  Future<String?> sendEth({
+    required EthereumAddress to,
+    required EtherAmount value,
+  }) {
+    // TODO: implement local ETH transfer
+    return Future.value(null);
+  }
+
+  @override
+  Future<String?> sendTransaction(Map<String, dynamic> transaction) async {
+    final network = findNetworkByNumeric(selectedNetwork.chainId);
+    if (network != null) {
+      return sendTransactionOnNetwork(transaction, network);
+    }
+
+    return _sendTransactionInternal(
+      transaction,
+      rpcUrl: selectedNetwork.rpcUrl,
+      chainId: selectedNetwork.chainId,
+    );
+  }
+
+  @override
+  Future<String?> sendTransactionOnNetwork(
+    Map<String, dynamic> transaction,
+    NetworkConfig network,
+  ) async {
+    final SignedTransactionDetails? signed =
+        await signTransactionForNetwork(transaction, network);
+    if (signed == null) {
+      return null;
+    }
+    try {
+      final String? broadcastHash = await broadcastSignedTransaction(
+        signed.rawTransaction,
+        network,
+      );
+      if (broadcastHash == null || broadcastHash.isEmpty) {
+        return signed.hash;
+      }
+      return broadcastHash;
+    } catch (error) {
+      final String message = error.toString().toLowerCase();
+      if (message.contains('already known')) {
+        return signed.hash;
+      }
+      rethrow;
+    }
+  }
+
+  @override
+  Future<SignedTransactionDetails?> signTransactionForNetwork(
+    Map<String, dynamic> transaction,
+    NetworkConfig network,
+  ) async {
+    final WalletData? currentWallet = wallet;
+    if (currentWallet == null) {
+      return null;
+    }
+
+    final String privateKey = currentWallet.privateKey;
+    if (privateKey.isEmpty) {
+      return null;
+    }
+
+    final Transaction tx = _transactionFromMap(
+      transaction,
+      from: currentWallet.address,
+    );
+
+    final Uint8List signed = await _withClientForRpc(
+      network.rpcUrl,
+      (client) async {
+        final String normalizedKey =
+            privateKey.startsWith('0x') ? privateKey.substring(2) : privateKey;
+        final EthPrivateKey credentials = EthPrivateKey.fromHex(normalizedKey);
+        return client.signTransaction(
+          credentials,
+          tx,
+          chainId: network.chainIdNumeric,
+          fetchChainIdFromNetworkId: false,
+        );
+      },
+    );
+
+    final String hash = '0x${bytesToHex(keccak256(signed))}';
+    return SignedTransactionDetails(
+      rawTransaction: signed,
+      hash: hash,
+    );
+  }
+
+  @override
+  Future<String?> broadcastSignedTransaction(
+    Uint8List signedTransaction,
+    NetworkConfig network,
+  ) {
+    return _withClientForRpc(network.rpcUrl, (client) {
+      return client.sendRawTransaction(signedTransaction);
+    });
+  }
+
+  @override
+  Future<BigInt?> getPendingNonce(
+    NetworkConfig network,
+    EthereumAddress address,
+  ) async {
+    try {
+      final int nonce = await _withClientForRpc(network.rpcUrl, (client) {
+        return client.getTransactionCount(
+          address,
+          atBlock: const BlockNum.pending(),
+        );
+      });
+      return BigInt.from(nonce);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> _sendTransactionInternal(
+    Map<String, dynamic> transaction, {
+    required String rpcUrl,
+    required int chainId,
+  }) async {
+    final currentWallet = wallet;
+    if (currentWallet == null) {
+      return null;
+    }
+
+    final Transaction tx = _transactionFromMap(
+      transaction,
+      from: currentWallet.address,
+    );
+
+    return _withClientForRpc(rpcUrl, (client) async {
+      final privateKey = currentWallet.privateKey;
+      final normalizedKey =
+          privateKey.startsWith('0x') ? privateKey.substring(2) : privateKey;
+      final credentials = EthPrivateKey.fromHex(normalizedKey);
+      final txHash = await client.sendTransaction(
+        credentials,
+        tx,
+        chainId: chainId,
+      );
+      return txHash;
+    });
+  }
+
+  Transaction _transactionFromMap(
+    Map<String, dynamic> transaction, {
+    required EthereumAddress from,
+  }) {
+    final dynamic toValue = transaction['to'];
+    EthereumAddress? to;
+    if (toValue is String && toValue.isNotEmpty) {
+      to = EthereumAddress.fromHex(toValue);
+    }
+
+    final BigInt? valueQuantity = _parseQuantity(transaction['value']);
+    final BigInt? gasQuantity =
+        _parseQuantity(transaction['gas'] ?? transaction['gasLimit']);
+    final BigInt? gasPriceQuantity = _parseQuantity(transaction['gasPrice']);
+    final BigInt? maxFeePerGasQuantity =
+        _parseQuantity(transaction['maxFeePerGas']);
+    final BigInt? maxPriorityFeePerGasQuantity =
+        _parseQuantity(transaction['maxPriorityFeePerGas']);
+    final BigInt? nonceQuantity = _parseQuantity(transaction['nonce']);
+
+    final dynamic dataValue = transaction['data'];
+    Uint8List? data;
+    if (dataValue is String && dataValue.isNotEmpty) {
+      data = _decodeHexData(dataValue);
+    } else if (dataValue is Uint8List) {
+      data = dataValue;
+    }
+
+    return Transaction(
+      from: from,
+      to: to,
+      value: valueQuantity != null ? EtherAmount.inWei(valueQuantity) : null,
+      gasPrice: gasPriceQuantity != null && maxFeePerGasQuantity == null
+          ? EtherAmount.inWei(gasPriceQuantity)
+          : null,
+      maxGas: _bigIntToInt(gasQuantity),
+      nonce: _bigIntToInt(nonceQuantity),
+      data: data,
+      maxFeePerGas: maxFeePerGasQuantity != null
+          ? EtherAmount.inWei(maxFeePerGasQuantity)
+          : null,
+      maxPriorityFeePerGas: maxPriorityFeePerGasQuantity != null
+          ? EtherAmount.inWei(maxPriorityFeePerGasQuantity)
+          : null,
+    );
+  }
+
+  BigInt? _parseQuantity(dynamic value) {
+    if (value == null) {
+      return null;
+    }
+    if (value is BigInt) {
+      return value;
+    }
+    if (value is int) {
+      return BigInt.from(value);
+    }
+    if (value is String) {
+      if (value.isEmpty) {
+        return null;
+      }
+      final cleaned = value.startsWith('0x') || value.startsWith('0X')
+          ? value.substring(2)
+          : value;
+      if (cleaned.isEmpty) {
+        return BigInt.zero;
+      }
+      final radix = value.startsWith('0x') || value.startsWith('0X') ? 16 : 10;
+      return BigInt.parse(cleaned, radix: radix);
+    }
+    throw ArgumentError('Unsupported quantity type: $value');
+  }
+
+  Uint8List _decodeHexData(String value) {
+    final cleaned = value.startsWith('0x') || value.startsWith('0X')
+        ? value.substring(2)
+        : value;
+    if (cleaned.isEmpty) {
+      return Uint8List(0);
+    }
+    if (cleaned.length.isOdd) {
+      throw const FormatException('Неверная hex-строка данных транзакции.');
+    }
+    final bytes = Uint8List(cleaned.length ~/ 2);
+    for (int i = 0; i < cleaned.length; i += 2) {
+      final segment = cleaned.substring(i, i + 2);
+      final value = int.tryParse(segment, radix: 16);
+      if (value == null) {
+        throw const FormatException('Неверная hex-строка данных транзакции.');
+      }
+      bytes[i ~/ 2] = value;
+    }
+    return bytes;
+  }
+
+  int? _bigIntToInt(BigInt? value) {
+    if (value == null) {
+      return null;
+    }
+    const maxInt = 0x7fffffffffffffff;
+    if (value.isNegative || value > BigInt.from(maxInt)) {
+      throw const FormatException('Недопустимое значение параметра транзакции.');
+    }
+    return value.toInt();
+  }
 
   String get formattedBalance {
     if (_balance == null) {
@@ -775,7 +1136,7 @@ class WalletController extends ChangeNotifier {
     }
   }
 
-  Future<ActionResult> sendTransaction({
+  Future<ActionResult> sendManualTransaction({
     required String toAddress,
     required String amountInEth,
   }) async {
@@ -921,8 +1282,15 @@ class WalletController extends ChangeNotifier {
     }
   }
 
-  Future<T> _withClient<T>(Future<T> Function(Web3Client client) action) async {
-    final client = Web3Client(selectedNetwork.rpcUrl, http.Client());
+  Future<T> _withClient<T>(Future<T> Function(Web3Client client) action) {
+    return _withClientForRpc(selectedNetwork.rpcUrl, action);
+  }
+
+  Future<T> _withClientForRpc<T>(
+    String rpcUrl,
+    Future<T> Function(Web3Client client) action,
+  ) async {
+    final client = Web3Client(rpcUrl, http.Client());
     try {
       return await action(client);
     } finally {
