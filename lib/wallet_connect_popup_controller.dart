@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
-import 'app_navigation.dart';
+import 'core/navigation/navigator_key.dart';
+import 'core/ui/popup_coordinator.dart';
 import 'wallet_connect_manager.dart';
 import 'wallet_connect_models.dart';
 import 'wallet_connect_request_popup.dart';
@@ -8,83 +10,188 @@ import 'wallet_connect_request_popup.dart';
 class WalletConnectPopupController {
   WalletConnectPopupController._();
 
-  static OverlayEntry? _entry;
+  static ValueNotifier<WalletConnectRequestLogEntry>? _entryNotifier;
   static int? _currentRequestId;
+  static BuildContext? _dialogContext;
 
   static void show(WalletConnectRequestLogEntry entry) {
-    final overlayState = appNavigatorKey.currentState?.overlay;
-    if (overlayState == null) {
+    final int requestId = entry.request.requestId;
+    if (_currentRequestId == requestId && _entryNotifier != null) {
+      _entryNotifier!.value = entry;
       return;
     }
-
-    final int requestId = entry.request.requestId;
-    if (_entry != null && _currentRequestId == requestId) {
-      _entry!.markNeedsBuild();
+    final ValueNotifier<WalletConnectRequestLogEntry>? currentNotifier =
+        _entryNotifier;
+    if (_dialogContext == null &&
+        currentNotifier != null &&
+        currentNotifier.value.request.requestId == requestId) {
+      currentNotifier.value = entry;
       return;
     }
 
     hide();
-    _currentRequestId = requestId;
+    final notifier = ValueNotifier<WalletConnectRequestLogEntry>(entry);
+    _entryNotifier = notifier;
 
-    _entry = OverlayEntry(
-      builder: (BuildContext context) {
-        return WalletConnectRequestPopup(
-          entry: entry,
-          onApprove: () => _handleApprove(entry),
-          onReject: () => _handleReject(entry),
-          onDismiss: () => _handleDismiss(entry),
-        );
-      },
-    );
-
-    overlayState.insert(_entry!);
+    PopupCoordinator.I.enqueue((BuildContext context) {
+      if (_entryNotifier != notifier) {
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          final NavigatorState navigator = Navigator.of(context);
+          if (navigator.canPop()) {
+            navigator.pop();
+          }
+        });
+        return const SizedBox.shrink();
+      }
+      return WillPopScope(
+        onWillPop: () async => false,
+        child: _WalletConnectPopupDialog(
+          notifier: notifier,
+        ),
+      );
+    });
   }
 
   static void hide() {
-    _entry?.remove();
-    _entry = null;
+    final BuildContext? context = _dialogContext;
+    final ValueNotifier<WalletConnectRequestLogEntry>? notifier = _entryNotifier;
+    _dialogContext = null;
     _currentRequestId = null;
+    _entryNotifier = null;
+    if (context != null) {
+      final NavigatorState navigator = Navigator.of(context);
+      if (navigator.canPop()) {
+        navigator.pop();
+      }
+    } else {
+      notifier?.dispose();
+    }
   }
 
-  static Future<void> _handleApprove(WalletConnectRequestLogEntry entry) async {
+  static Future<void> _handleApprove() async {
+    final WalletConnectRequestLogEntry? entry = _entryNotifier?.value;
+    if (entry == null) {
+      return;
+    }
     final manager = WalletConnectManager.instance;
     try {
-      await manager.approveRequest(entry.request.requestId);
+      final future = manager.approveRequest(entry.request.requestId);
       hide();
+      await future;
       _showSnackBar('Request approved');
     } on StateError catch (_) {
-      _showSnackBar('Request is no longer pending');
       hide();
+      _showSnackBar('Request is no longer pending');
     } catch (error) {
       _showSnackBar('Failed to approve request: $error');
     }
   }
 
-  static Future<void> _handleReject(WalletConnectRequestLogEntry entry) async {
+  static Future<void> _handleReject() async {
+    final WalletConnectRequestLogEntry? entry = _entryNotifier?.value;
+    if (entry == null) {
+      return;
+    }
     final manager = WalletConnectManager.instance;
     try {
-      await manager.rejectRequest(entry.request.requestId);
+      final future = manager.rejectRequest(entry.request.requestId);
       hide();
+      await future;
       _showSnackBar('Request rejected');
     } on StateError catch (_) {
-      _showSnackBar('Request is no longer pending');
       hide();
+      _showSnackBar('Request is no longer pending');
     } catch (error) {
       _showSnackBar('Failed to reject request: $error');
     }
   }
 
-  static void _handleDismiss(WalletConnectRequestLogEntry entry) {
+  static void _handleDismiss() {
+    final WalletConnectRequestLogEntry? entry = _entryNotifier?.value;
+    if (entry == null) {
+      return;
+    }
     WalletConnectManager.instance.dismissRequest(entry.request.requestId);
     hide();
   }
 
+  static void _registerDialogContext(
+    BuildContext context,
+    ValueNotifier<WalletConnectRequestLogEntry> notifier,
+  ) {
+    _dialogContext = context;
+    _currentRequestId = notifier.value.request.requestId;
+  }
+
+  static void _clearDialogContext(
+    BuildContext context,
+    ValueNotifier<WalletConnectRequestLogEntry> notifier,
+  ) {
+    if (_dialogContext == context) {
+      _dialogContext = null;
+    }
+    if (_currentRequestId == notifier.value.request.requestId) {
+      _currentRequestId = null;
+    }
+    if (identical(_entryNotifier, notifier)) {
+      _entryNotifier = null;
+    }
+    notifier.dispose();
+  }
+
   static void _showSnackBar(String message) {
-    final context = appNavigatorKey.currentContext;
+    final BuildContext? context = rootNavigatorKey.currentContext;
     if (context == null) {
       return;
     }
-    final messenger = ScaffoldMessenger.maybeOf(context);
+    final ScaffoldMessengerState? messenger = ScaffoldMessenger.maybeOf(context);
     messenger?.showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+class _WalletConnectPopupDialog extends StatefulWidget {
+  const _WalletConnectPopupDialog({
+    required this.notifier,
+  });
+
+  final ValueNotifier<WalletConnectRequestLogEntry> notifier;
+
+  @override
+  State<_WalletConnectPopupDialog> createState() => _WalletConnectPopupDialogState();
+}
+
+class _WalletConnectPopupDialogState extends State<_WalletConnectPopupDialog> {
+  @override
+  void initState() {
+    super.initState();
+    WalletConnectPopupController._registerDialogContext(
+      context,
+      widget.notifier,
+    );
+  }
+
+  @override
+  void dispose() {
+    WalletConnectPopupController._clearDialogContext(context, widget.notifier);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: EdgeInsets.zero,
+      child: ValueListenableBuilder<WalletConnectRequestLogEntry>(
+        valueListenable: widget.notifier,
+        builder: (BuildContext context, WalletConnectRequestLogEntry entry, _) {
+          return WalletConnectRequestPopup(
+            entry: entry,
+            onApprove: WalletConnectPopupController._handleApprove,
+            onReject: WalletConnectPopupController._handleReject,
+            onDismiss: WalletConnectPopupController._handleDismiss,
+          );
+        },
+      ),
+    );
   }
 }
