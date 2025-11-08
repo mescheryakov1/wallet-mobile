@@ -1064,8 +1064,8 @@ class WalletConnectService extends ChangeNotifier {
     if (event == null) {
       return;
     }
-    final String topicLabel = sessionTopic(event) ?? '<unknown>';
-    PopupCoordinator.I.log('WC:event session_connect topic=$topicLabel');
+    final t = sessionTopic(event) ?? '<unknown>';
+    PopupCoordinator.I.log('WC:event session_connect topic:$t');
     unawaited(_refreshActiveSessions());
   }
 
@@ -1201,9 +1201,9 @@ class WalletConnectService extends ChangeNotifier {
     }
     final method = event.params.request.method;
     PopupCoordinator.I.log('WC:event session_request $method');
-    final String topicLabel = sessionTopic(event) ?? '<unknown>';
+    final t = sessionTopic(event) ?? '<unknown>';
     debugPrint(
-      'WC session_request topic=$topicLabel method=$method',
+      'WC session_request topic=$t method=$method',
     );
   }
 
