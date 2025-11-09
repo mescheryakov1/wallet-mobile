@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'wallet_connect_manager.dart';
 import 'wallet_connect_models.dart';
 import 'wallet_connect_service.dart';
+import 'wc/wc_service.dart';
 
 class WalletConnectPairPage extends StatefulWidget {
   const WalletConnectPairPage({super.key});
@@ -15,11 +16,13 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
   late final TextEditingController _uriController;
   final WalletConnectManager _manager = WalletConnectManager.instance;
   WalletConnectService get _service => _manager.service;
+  late final WcService _wcService;
 
   @override
   void initState() {
     super.initState();
     _uriController = TextEditingController();
+    _wcService = _manager.wcService;
   }
 
   @override
@@ -30,12 +33,14 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
 
   Future<void> _pair() async {
     final uri = _uriController.text.trim();
-    if (uri.isEmpty || _service.isPairing) {
+    final WcStatus status = _wcService.state.value.status;
+    final bool isBusy = status == WcStatus.pairing || status == WcStatus.proposed;
+    if (uri.isEmpty || isBusy) {
       return;
     }
 
     try {
-      await _service.connectFromUri(uri);
+      await _wcService.connectFromUri(uri);
     } catch (error) {
       if (!mounted) {
         return;
@@ -54,11 +59,16 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
           _service,
           _manager,
           _manager.requestQueue,
+          _wcService.state,
         ],
       ),
       builder: (BuildContext context, Widget? _) {
-        final bool isPairing = _service.isPairing;
-        final String? error = _service.pairingError;
+        final WcState wcState = _wcService.state.value;
+        final bool isPairing =
+            wcState.status == WcStatus.pairing || wcState.status == WcStatus.proposed;
+        final String? error = wcState.status == WcStatus.error
+            ? wcState.message
+            : _service.pairingError;
         final WalletConnectSessionInfo? session = _service.primarySessionInfo;
         return Scaffold(
           appBar: AppBar(
@@ -66,16 +76,33 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
           ),
           body: session != null
               ? _buildConnectedBody(context, session)
-              : _buildConnectForm(isPairing: isPairing, error: error),
+              : _buildConnectForm(
+                  state: wcState,
+                  isPairing: isPairing,
+                  error: error,
+                ),
         );
       },
     );
   }
 
   Widget _buildConnectForm({
+    required WcState state,
     required bool isPairing,
     required String? error,
   }) {
+    final String? statusMessage;
+    switch (state.status) {
+      case WcStatus.pairing:
+        statusMessage = 'Waiting for session proposal...';
+        break;
+      case WcStatus.proposed:
+        statusMessage = 'Session proposal received. Awaiting confirmation...';
+        break;
+      default:
+        statusMessage = null;
+        break;
+    }
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -108,18 +135,18 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
                   : const Text('Connect'),
             ),
           ),
-          if (isPairing) ...[
+          if (statusMessage != null) ...[
             const SizedBox(height: 16),
             Row(
-              children: const <Widget>[
-                SizedBox(
+              children: <Widget>[
+                const SizedBox(
                   height: 16,
                   width: 16,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
-                SizedBox(width: 12),
+                const SizedBox(width: 12),
                 Expanded(
-                  child: Text('Waiting for session proposal...'),
+                  child: Text(statusMessage),
                 ),
               ],
             ),

@@ -31,7 +31,7 @@ Future<void> main() async {
   await WalletConnectManager.instance.initialize(
     walletApi: _walletController,
   );
-  await handleInitialUriAndStream(WalletConnectManager.instance.service);
+  await handleInitialUriAndStream(WalletConnectManager.instance.wcService);
   runApp(WalletApp(controller: _walletController));
 }
 

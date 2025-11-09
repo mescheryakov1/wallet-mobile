@@ -1,7 +1,7 @@
-import '../../wallet_connect_service.dart';
+import '../../wc/wc_service.dart';
 import '../deeplink/android_deeplink.dart' show DeeplinkAndroid;
 
-Future<void> handleInitialUriAndStream(WalletConnectService svc) async {
+Future<void> handleInitialUriAndStream(WcService svc) async {
   await DeeplinkAndroid.init();
 
   DeeplinkAndroid.stream.listen((String link) async {

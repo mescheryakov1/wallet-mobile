@@ -6,6 +6,7 @@ import 'local_wallet_api.dart';
 import 'wallet_connect_models.dart';
 import 'wallet_connect_popup_controller.dart';
 import 'wallet_connect_service.dart';
+import 'wc/wc_service.dart';
 
 class WalletConnectManager extends ChangeNotifier {
   WalletConnectManager._();
@@ -13,6 +14,7 @@ class WalletConnectManager extends ChangeNotifier {
   static final WalletConnectManager instance = WalletConnectManager._();
 
   WalletConnectService? _service;
+  WcService? _wcService;
   StreamSubscription<WalletConnectRequestEvent>? _requestSubscription;
   bool _initialized = false;
 
@@ -21,6 +23,14 @@ class WalletConnectManager extends ChangeNotifier {
 
   WalletConnectService get service {
     final WalletConnectService? svc = _service;
+    if (svc == null) {
+      throw StateError('WalletConnectManager has not been initialized');
+    }
+    return svc;
+  }
+
+  WcService get wcService {
+    final WcService? svc = _wcService;
     if (svc == null) {
       throw StateError('WalletConnectManager has not been initialized');
     }
@@ -37,10 +47,13 @@ class WalletConnectManager extends ChangeNotifier {
       return;
     }
 
+    final WcService wcSvc = WcService();
     final WalletConnectService svc = WalletConnectService(
       walletApi: walletApi,
+      wcService: wcSvc,
       projectId: projectId,
     );
+    _wcService = wcSvc;
     _service = svc
       ..addListener(_handleServiceUpdate);
     _requestSubscription = svc.requestEvents.listen(_handleRequestEvent);
@@ -149,6 +162,8 @@ class WalletConnectManager extends ChangeNotifier {
   void dispose() {
     _requestSubscription?.cancel();
     _service?.removeListener(_handleServiceUpdate);
+    unawaited(_wcService?.dispose());
+    _wcService = null;
     super.dispose();
   }
 }

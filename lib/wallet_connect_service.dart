@@ -16,6 +16,7 @@ import 'local_wallet_api.dart';
 import 'network_config.dart';
 import 'wallet_connect_models.dart';
 import 'nonce_manager.dart';
+import 'wc/wc_service.dart';
 
 const String _defaultWalletConnectProjectId =
     'ac79370327e3526ba018428bc44831f1';
@@ -88,12 +89,14 @@ class WalletConnectRequestException implements Exception {
 class WalletConnectService extends ChangeNotifier {
   WalletConnectService({
     required this.walletApi,
+    required this.wcService,
     String? projectId,
   })  : projectId = projectId ?? _defaultWalletConnectProjectId {
     _attachWalletListenerIfNeeded();
   }
 
   final LocalWalletApi walletApi;
+  final WcService wcService;
   final String projectId;
 
   final List<String> activeSessions = [];
@@ -209,6 +212,7 @@ class WalletConnectService extends ChangeNotifier {
       );
 
       _client = client;
+      wcService.attachClient(client);
 
       await _loadPersistedSessions();
 
