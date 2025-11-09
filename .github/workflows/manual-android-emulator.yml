@@ -1,0 +1,77 @@
+name: Manual Android APK smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_file:
+        description: Workflow file that produces the Android APK artifact (e.g. build-android.yml)
+        required: true
+        default: build-android.yml
+      artifact_name:
+        description: Name of the artifact that contains the APK file
+        required: true
+        default: android-apk
+      branch:
+        description: Branch to inspect for the successful run
+        required: false
+        default: main
+      app_package:
+        description: Application package name used by adb commands (e.g. com.example.app)
+        required: true
+      launch_activity:
+        description: Optional fully-qualified activity name to launch (e.g. .MainActivity or com.example.app.MainActivity)
+        required: false
+      launch_wait_seconds:
+        description: Seconds to wait after launching the app before verifying it is running
+        required: false
+        default: '20'
+      api_level:
+        description: Android API level for the emulator
+        required: false
+        default: '33'
+      emulator_target:
+        description: Emulator target system image
+        required: false
+        default: google_apis
+      arch:
+        description: Emulator CPU architecture
+        required: false
+        default: x86_64
+      profile:
+        description: Emulator hardware profile
+        required: false
+        default: pixel_6
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  android-smoke-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download latest Android APK artifact
+        id: download
+        env:
+          SOURCE_WORKFLOW: ${{ github.event.inputs.workflow_file }}
+          ARTIFACT_NAME: ${{ github.event.inputs.artifact_name }}
+          SOURCE_BRANCH: ${{ github.event.inputs.branch }}
+          ARTIFACT_DOWNLOAD_DIR: downloaded-android-artifact
+        run: bash tool/ci-download-android-apk.sh
+
+      - name: Run APK on Android emulator
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ github.event.inputs.api_level }}
+          target: ${{ github.event.inputs.emulator_target }}
+          arch: ${{ github.event.inputs.arch }}
+          profile: ${{ github.event.inputs.profile }}
+          script: bash tool/ci-run-android-apk.sh
+        env:
+          APK_PATH: ${{ steps.download.outputs.apk-path }}
+          APP_PACKAGE: ${{ github.event.inputs.app_package }}
+          LAUNCH_ACTIVITY: ${{ github.event.inputs.launch_activity }}
+          APP_LAUNCH_WAIT_SECONDS: ${{ github.event.inputs.launch_wait_seconds }}
