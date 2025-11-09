@@ -1,14 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:blockchain_utils/blockchain_utils.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web3dart/crypto.dart';
 import 'package:web3dart/web3dart.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'app_lifecycle_logger.dart';
 import 'core/navigation/navigator_key.dart';
@@ -20,6 +23,7 @@ import 'wallet_connect_activity_screen.dart';
 import 'wallet_connect_manager.dart';
 import 'wallet_connect_models.dart';
 import 'wallet_connect_page.dart';
+import 'ui/dialog_dispatcher.dart';
 late final WalletController _walletController;
 
 Future<void> main() async {
@@ -34,16 +38,62 @@ Future<void> main() async {
   runApp(WalletApp(controller: _walletController));
   // Инициализация deeplink только на Android и без блокировки UI.
   // ignore: discarded_futures
-  handleInitialUriAndStream(WalletConnectManager.instance.wcService);
+  handleInitialUriAndStream();
 }
 
-class WalletApp extends StatelessWidget {
+class WalletApp extends StatefulWidget {
   const WalletApp({
     required this.controller,
     super.key,
   });
 
   final WalletController controller;
+
+  @override
+  State<WalletApp> createState() => _WalletAppState();
+}
+
+class _WalletAppState extends State<WalletApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _syncInitialLifecycleState();
+    unawaited(_initDesktopWindow());
+  }
+
+  Future<void> _initDesktopWindow() async {
+    if (kIsWeb || !Platform.isWindows) {
+      return;
+    }
+    await windowManager.ensureInitialized();
+    await windowManager.waitUntilReadyToShow(null, () async {
+      await windowManager.show();
+      await windowManager.focus();
+    });
+  }
+
+  void _syncInitialLifecycleState() {
+    final AppLifecycleState? state = WidgetsBinding.instance.lifecycleState;
+    final bool isResumed =
+        state == null ||
+        state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive;
+    WalletConnectManager.instance.pending.setAppResumed(isResumed);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final bool isResumed =
+        state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
+    WalletConnectManager.instance.pending.setAppResumed(isResumed);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,8 +104,8 @@ class WalletApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
-      navigatorKey: rootNavigatorKey,
-      home: WalletHomePage(controller: controller),
+      navigatorKey: appNavigatorKey,
+      home: WalletHomePage(controller: widget.controller),
     );
   }
 }
@@ -421,9 +471,8 @@ class _EmptyWalletState extends State<_EmptyWallet> {
                       );
                     } catch (error, stackTrace) {
                       if (!context.mounted) return;
-                      await showDialog<void>(
-                        context: context,
-                        builder: (dialogContext) => AlertDialog(
+                      await dialogDispatcher.enqueue(
+                        (BuildContext dialogContext) => AlertDialog(
                           title: const Text('Ошибка создания кошелька'),
                           content: SingleChildScrollView(
                             child: Text('$error\n$stackTrace'),

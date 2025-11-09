@@ -2,8 +2,7 @@ import 'dart:collection';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-
-import '../navigation/navigator_key.dart';
+import 'package:wallet_mobile/ui/dialog_dispatcher.dart';
 
 typedef PopupBuilder = Widget Function(BuildContext context);
 
@@ -34,20 +33,16 @@ class PopupCoordinator with WidgetsBindingObserver {
   Future<void> _drain() async {
     if (_showing) return;
     if (_state != AppLifecycleState.resumed) return;
-    final nav = rootNavigatorKey.currentState;
-    final ctx = rootNavigatorKey.currentContext;
-    if (nav == null || ctx == null) return;
     final next = _queue.isEmpty ? null : _queue.removeFirst();
     if (next == null) return;
     _showing = true;
     SchedulerBinding.instance.addPostFrameCallback((_) async {
-      await showDialog<void>(
-        context: ctx,
-        barrierDismissible: false,
-        builder: next,
-      );
-      _showing = false;
-      _drain();
+      try {
+        await dialogDispatcher.enqueue(next);
+      } finally {
+        _showing = false;
+        _drain();
+      }
     });
   }
 

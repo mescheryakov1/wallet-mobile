@@ -7,6 +7,7 @@ import 'wallet_connect_models.dart';
 import 'wallet_connect_popup_controller.dart';
 import 'wallet_connect_service.dart';
 import 'wc/wc_service.dart';
+import 'wc/wc_pending.dart';
 
 class WalletConnectManager extends ChangeNotifier {
   WalletConnectManager._();
@@ -20,6 +21,7 @@ class WalletConnectManager extends ChangeNotifier {
 
   final WalletConnectRequestQueue requestQueue = WalletConnectRequestQueue();
   WalletConnectRequestEvent? _lastRequestEvent;
+  final WcPendingBuffer pending = WcPendingBuffer();
 
   WalletConnectService get service {
     final WalletConnectService? svc = _service;
@@ -54,10 +56,13 @@ class WalletConnectManager extends ChangeNotifier {
       projectId: projectId,
     );
     _wcService = wcSvc;
+    wcSvc.onPairingAvailable = pending.notifyReady;
+    pending.bind((String uri) => wcSvc.connectFromUri(uri));
     _service = svc
       ..addListener(_handleServiceUpdate);
     _requestSubscription = svc.requestEvents.listen(_handleRequestEvent);
     await svc.init();
+    pending.markClientReady();
     _initialized = true;
     notifyListeners();
   }
@@ -162,7 +167,11 @@ class WalletConnectManager extends ChangeNotifier {
   void dispose() {
     _requestSubscription?.cancel();
     _service?.removeListener(_handleServiceUpdate);
-    unawaited(_wcService?.dispose());
+    final WcService? wcSvc = _wcService;
+    if (wcSvc != null) {
+      wcSvc.onPairingAvailable = null;
+      unawaited(wcSvc.dispose());
+    }
     _wcService = null;
     super.dispose();
   }

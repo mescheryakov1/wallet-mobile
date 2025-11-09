@@ -1,10 +1,10 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
 
-import '../../wc/wc_service.dart';
+import '../../wallet_connect_manager.dart';
 import '../deeplink/android_deeplink.dart' show DeeplinkAndroid;
 
-Future<void> handleInitialUriAndStream(WcService svc) async {
+Future<void> handleInitialUriAndStream() async {
   // Только Android. На Windows/macOS/Linux/Web выходим сразу.
   if (kIsWeb || !Platform.isAndroid) return;
   await DeeplinkAndroid.init();
@@ -15,9 +15,7 @@ Future<void> handleInitialUriAndStream(WcService svc) async {
     }
 
     try {
-      // запускаем pairing неблокирующе
-      // ignore: discarded_futures
-      svc.connectFromUri(link);
+      WalletConnectManager.instance.pending.push(link);
     } catch (_) {
       // ignored: errors are handled by the service
     }

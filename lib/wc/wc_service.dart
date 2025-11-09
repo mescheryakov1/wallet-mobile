@@ -92,11 +92,13 @@ class WcService {
       ValueNotifier<WcState>(const WcState(status: WcStatus.idle));
   final StreamController<WcUiEvent> _uiEvents =
       StreamController<WcUiEvent>.broadcast();
+  VoidCallback? onPairingAvailable;
 
   wc.SignClient? _client;
   Timer? _pairTimer;
   String? _pendingTopic;
   bool _disposed = false;
+  bool _pairingInFlight = false;
 
   Stream<WcUiEvent> get uiEvents => _uiEvents.stream;
 
@@ -131,13 +133,19 @@ class WcService {
     _cancelPairTimer();
     _detachClient();
     _pendingTopic = null;
+    _pairingInFlight = false;
     state.dispose();
     await _uiEvents.close();
   }
 
-  Future<void> connectFromUri(String wcUri) async {
+  Future<bool> connectFromUri(String wcUri) async {
     if (_disposed) {
       throw StateError('WcService has been disposed');
+    }
+
+    if (_pairingInFlight) {
+      dev.log('connectFromUri skipped: pairing already in flight', name: _logTag);
+      return false;
     }
 
     final wc.SignClient? client = _client;
@@ -147,7 +155,7 @@ class WcService {
         message: 'WalletConnect client not ready',
         clearMessage: false,
       );
-      return;
+      return false;
     }
 
     final String trimmed = wcUri.trim();
@@ -157,7 +165,7 @@ class WcService {
         message: 'WalletConnect URI is empty',
         clearMessage: false,
       );
-      return;
+      return true;
     }
 
     dev.log('connectFromUri uri=$trimmed', name: _logTag);
@@ -182,9 +190,10 @@ class WcService {
         clearMessage: false,
       );
       _pendingTopic = null;
-      return;
+      return true;
     }
 
+    _pairingInFlight = true;
     _setState(
       status: WcStatus.pairing,
       topic: topic,
@@ -198,7 +207,7 @@ class WcService {
         'Existing active pairing for topic $topic, waiting for proposal',
         name: _logTag,
       );
-      return;
+      return true;
     }
 
     Future.microtask(() async {
@@ -223,6 +232,7 @@ class WcService {
         }
       }
     });
+    return true;
   }
 
   void _handleSessionProposal(wc.SessionProposalEvent? event) {
@@ -315,6 +325,10 @@ class WcService {
       message: message,
       clearMessage: clearMessage,
     );
+    if (next.status != WcStatus.pairing && _pairingInFlight) {
+      _pairingInFlight = false;
+      onPairingAvailable?.call();
+    }
     if (next != current) {
       dev.log(
         'state => status=${next.status} topic=${next.topic} message=${next.message}',
