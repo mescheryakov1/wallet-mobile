@@ -1,0 +1,26 @@
+/*
+  Shim: выставляет android.namespace из package в AndroidManifest.xml
+  для любых подмодулей без namespace (например, uni_links 0.5.1).
+*/
+subprojects { sub ->
+  afterEvaluate {
+    if (sub.plugins.hasPlugin('com.android.library')
+        || sub.plugins.hasPlugin('com.android.application')) {
+      def androidExt = sub.extensions.findByName('android')
+      if (androidExt != null) {
+        def hasNs = false
+        try { hasNs = androidExt.hasProperty('namespace') && androidExt.namespace } catch(Exception ignored) { }
+        if (!hasNs) {
+          def manifestFile = androidExt.sourceSets.main.manifest.srcFile
+          if (manifestFile != null && manifestFile.exists()) {
+            def pkg = new groovy.util.XmlSlurper().parse(manifestFile).'@package'.text()
+            if (pkg) {
+              androidExt.namespace = pkg
+              println("[namespace-shim] ${sub.name} -> ${pkg}")
+            }
+          }
+        }
+      }
+    }
+  }
+}

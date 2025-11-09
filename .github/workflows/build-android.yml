@@ -18,7 +18,7 @@ jobs:
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
+          distribution: 'temurin'
           java-version: '17'
 
       - name: Set up Flutter
@@ -46,6 +46,17 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
+
+      - name: Clean Gradle caches
+        run: |
+          if [ -f android/gradlew ]; then
+            (cd android && ./gradlew --stop) || true
+          elif [ -f ./gradlew ]; then
+            ./gradlew --stop || true
+          else
+            echo "Gradle wrapper not found, skipping gradle --stop"
+          fi
+          rm -rf ~/.gradle/caches ~/.gradle/daemon || true
 
       - name: Check Flutter version
         run: flutter --version

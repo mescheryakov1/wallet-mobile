@@ -10,19 +10,38 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web3dart/crypto.dart';
 import 'package:web3dart/web3dart.dart';
 
-import 'app_navigation.dart';
+import 'app_lifecycle_logger.dart';
+import 'core/navigation/navigator_key.dart';
+import 'core/ui/popup_coordinator.dart';
+import 'core/wallet/walletconnect_deeplink.dart';
 import 'local_wallet_api.dart';
 import 'network_config.dart';
 import 'wallet_connect_activity_screen.dart';
 import 'wallet_connect_manager.dart';
 import 'wallet_connect_models.dart';
 import 'wallet_connect_page.dart';
-void main() {
-  runApp(const WalletApp());
+late final WalletController _walletController;
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  PopupCoordinator.I.init();
+  AppLifecycleLogger();
+  _walletController = WalletController();
+  await _walletController.initialize();
+  await WalletConnectManager.instance.initialize(
+    walletApi: _walletController,
+  );
+  await handleInitialUriAndStream(WalletConnectManager.instance.service);
+  runApp(WalletApp(controller: _walletController));
 }
 
 class WalletApp extends StatelessWidget {
-  const WalletApp({super.key});
+  const WalletApp({
+    required this.controller,
+    super.key,
+  });
+
+  final WalletController controller;
 
   @override
   Widget build(BuildContext context) {
@@ -33,14 +52,19 @@ class WalletApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
-      navigatorKey: appNavigatorKey,
-      home: const WalletHomePage(),
+      navigatorKey: rootNavigatorKey,
+      home: WalletHomePage(controller: controller),
     );
   }
 }
 
 class WalletHomePage extends StatefulWidget {
-  const WalletHomePage({super.key});
+  const WalletHomePage({
+    required this.controller,
+    super.key,
+  });
+
+  final WalletController controller;
 
   @override
   State<WalletHomePage> createState() => _WalletHomePageState();
@@ -54,14 +78,8 @@ class _WalletHomePageState extends State<WalletHomePage> {
   @override
   void initState() {
     super.initState();
-    _controller = WalletController();
+    _controller = widget.controller;
     _controller.addListener(_handleControllerUpdate);
-    unawaited(_controller.initialize());
-    unawaited(
-      WalletConnectManager.instance.initialize(
-        walletApi: _controller,
-      ),
-    );
   }
 
   void _handleControllerUpdate() {
@@ -73,7 +91,6 @@ class _WalletHomePageState extends State<WalletHomePage> {
   @override
   void dispose() {
     _controller.removeListener(_handleControllerUpdate);
-    _controller.dispose();
     _recipientController.dispose();
     _amountController.dispose();
     super.dispose();

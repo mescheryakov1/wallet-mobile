@@ -10,6 +10,8 @@ import 'package:walletconnect_flutter_v2/apis/sign_api/models/session_models.dar
 import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart';
 import 'package:web3dart/web3dart.dart';
 
+import 'core/ui/popup_coordinator.dart';
+import 'core/wallet/wc_utils.dart';
 import 'local_wallet_api.dart';
 import 'network_config.dart';
 import 'wallet_connect_models.dart';
@@ -193,6 +195,7 @@ class WalletConnectService extends ChangeNotifier {
     notifyListeners();
 
     try {
+      PopupCoordinator.I.log('WC:init start');
       final metadata = PairingMetadata(
         name: 'Wallet Mobile',
         description: 'Flutter wallet',
@@ -220,6 +223,7 @@ class WalletConnectService extends ChangeNotifier {
 
       await _refreshActiveSessions();
       _status = 'ready';
+      PopupCoordinator.I.log('WC:init done');
     } catch (error, stackTrace) {
       _status = 'error: $error';
       debugPrint('WalletConnect init failed: $error\n$stackTrace');
@@ -773,6 +777,8 @@ class WalletConnectService extends ChangeNotifier {
     notifyListeners();
 
     final proposal = event.params;
+    final proposerName = proposal.proposer.metadata.name ?? 'unknown dApp';
+    PopupCoordinator.I.log('WC:event session_proposal from $proposerName');
     final address = walletApi.getAddress();
     if (address == null) {
       debugLastError = 'reject: no address available';
@@ -1058,6 +1064,8 @@ class WalletConnectService extends ChangeNotifier {
     if (event == null) {
       return;
     }
+    final t = sessionTopic(event) ?? '<unknown>';
+    PopupCoordinator.I.log('WC:event session_connect topic:$t');
     unawaited(_refreshActiveSessions());
   }
 
@@ -1191,8 +1199,11 @@ class WalletConnectService extends ChangeNotifier {
     if (event == null) {
       return;
     }
+    final method = event.params.request.method;
+    PopupCoordinator.I.log('WC:event session_request $method');
+    final t = sessionTopic(event) ?? '<unknown>';
     debugPrint(
-      'WC session_request topic=${event.topic} method=${event.params.request.method}',
+      'WC session_request topic=$t method=$method',
     );
   }
 

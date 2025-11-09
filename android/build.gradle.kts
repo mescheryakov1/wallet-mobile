@@ -5,6 +5,8 @@ allprojects {
     }
 }
 
+apply(from = "namespace-shim.gradle")
+
 val newBuildDir: Directory =
     rootProject.layout.buildDirectory
         .dir("../../build")
