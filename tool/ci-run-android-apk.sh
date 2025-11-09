@@ -8,11 +8,41 @@ if ! command -v "${ADB_BIN}" >/dev/null 2>&1; then
   exit 1
 fi
 
-: "${APK_PATH:?APK_PATH must point to the APK file to install}"
-: "${APP_PACKAGE:?APP_PACKAGE must be provided (e.g. com.example.app)}"
+if [[ -z "${APK_PATH:-}" ]]; then
+  nullglob_was_set=0
+  if shopt -q nullglob; then
+    nullglob_was_set=1
+  else
+    shopt -s nullglob
+  fi
+
+  DEFAULT_APK_CANDIDATES=(
+    downloaded-android-artifact/app-release.apk
+    downloaded-android-artifact/app-debug.apk
+    downloaded-android-artifact/*.apk
+    build/app/outputs/flutter-apk/app-release.apk
+    build/app/outputs/flutter-apk/app-profile.apk
+    build/app/outputs/flutter-apk/app-debug.apk
+  )
+
+  for candidate in "${DEFAULT_APK_CANDIDATES[@]}"; do
+    if [[ -f "$candidate" ]]; then
+      APK_PATH="$candidate"
+      break
+    fi
+  done
+
+  if [[ $nullglob_was_set -eq 0 ]]; then
+    shopt -u nullglob
+  fi
+fi
+
+: "${APK_PATH:?APK file could not be located automatically. Set APK_PATH manually.}"
+
+APP_PACKAGE="${APP_PACKAGE:-com.example.wallet_mobile}"
 
 LAUNCH_ACTIVITY="${LAUNCH_ACTIVITY:-}"
-WAIT_SECONDS="${APP_LAUNCH_WAIT_SECONDS:-15}"
+WAIT_SECONDS="${APP_LAUNCH_WAIT_SECONDS:-20}"
 
 "${ADB_BIN}" wait-for-device
 "${ADB_BIN}" uninstall "${APP_PACKAGE}" >/dev/null 2>&1 || true
