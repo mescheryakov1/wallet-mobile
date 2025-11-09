@@ -6,6 +6,8 @@ import 'local_wallet_api.dart';
 import 'wallet_connect_models.dart';
 import 'wallet_connect_popup_controller.dart';
 import 'wallet_connect_service.dart';
+import 'wc/wc_service.dart';
+import 'wc/wc_pending.dart';
 
 class WalletConnectManager extends ChangeNotifier {
   WalletConnectManager._();
@@ -13,14 +15,24 @@ class WalletConnectManager extends ChangeNotifier {
   static final WalletConnectManager instance = WalletConnectManager._();
 
   WalletConnectService? _service;
+  WcService? _wcService;
   StreamSubscription<WalletConnectRequestEvent>? _requestSubscription;
   bool _initialized = false;
 
   final WalletConnectRequestQueue requestQueue = WalletConnectRequestQueue();
   WalletConnectRequestEvent? _lastRequestEvent;
+  final WcPendingBuffer pending = WcPendingBuffer();
 
   WalletConnectService get service {
     final WalletConnectService? svc = _service;
+    if (svc == null) {
+      throw StateError('WalletConnectManager has not been initialized');
+    }
+    return svc;
+  }
+
+  WcService get wcService {
+    final WcService? svc = _wcService;
     if (svc == null) {
       throw StateError('WalletConnectManager has not been initialized');
     }
@@ -37,14 +49,20 @@ class WalletConnectManager extends ChangeNotifier {
       return;
     }
 
+    final WcService wcSvc = WcService();
     final WalletConnectService svc = WalletConnectService(
       walletApi: walletApi,
+      wcService: wcSvc,
       projectId: projectId,
     );
+    _wcService = wcSvc;
+    wcSvc.onPairingAvailable = pending.notifyReady;
+    pending.bind((String uri) => wcSvc.connectFromUri(uri));
     _service = svc
       ..addListener(_handleServiceUpdate);
     _requestSubscription = svc.requestEvents.listen(_handleRequestEvent);
     await svc.init();
+    pending.markClientReady();
     _initialized = true;
     notifyListeners();
   }
@@ -149,6 +167,12 @@ class WalletConnectManager extends ChangeNotifier {
   void dispose() {
     _requestSubscription?.cancel();
     _service?.removeListener(_handleServiceUpdate);
+    final WcService? wcSvc = _wcService;
+    if (wcSvc != null) {
+      wcSvc.onPairingAvailable = null;
+      unawaited(wcSvc.dispose());
+    }
+    _wcService = null;
     super.dispose();
   }
 }

@@ -1,3 +1,5 @@
 import 'package:flutter/widgets.dart';
 
-final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
+
+GlobalKey<NavigatorState> get rootNavigatorKey => appNavigatorKey;
