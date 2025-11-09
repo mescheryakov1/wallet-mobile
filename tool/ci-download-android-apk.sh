@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+: "${GITHUB_TOKEN:?GITHUB_TOKEN must be set}"
+export GH_TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"
+
 if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required but not installed." >&2
   exit 1
@@ -12,7 +15,6 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}"
-: "${GITHUB_TOKEN:?GITHUB_TOKEN must be set}"
 : "${SOURCE_WORKFLOW:?SOURCE_WORKFLOW must be set (e.g. build-android.yml)}"
 : "${ARTIFACT_NAME:?ARTIFACT_NAME must be set (e.g. android-apk)}"
 

@@ -1,0 +1,18 @@
+name: Manual Android APK smoke test
+on: workflow_dispatch
+
+permissions:
+  contents: read
+  actions: read  # нужно, чтобы скачивать артефакты других ранoв
+
+jobs:
+  android-smoke-test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # gh CLI читает GH_TOKEN
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download latest Android APK artifact
+        run: tool/ci-download-android-apk.sh
+      # остальные шаги...
