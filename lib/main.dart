@@ -31,8 +31,10 @@ Future<void> main() async {
   await WalletConnectManager.instance.initialize(
     walletApi: _walletController,
   );
-  await handleInitialUriAndStream(WalletConnectManager.instance.wcService);
   runApp(WalletApp(controller: _walletController));
+  // Инициализация deeplink только на Android и без блокировки UI.
+  // ignore: discarded_futures
+  handleInitialUriAndStream(WalletConnectManager.instance.wcService);
 }
 
 class WalletApp extends StatelessWidget {

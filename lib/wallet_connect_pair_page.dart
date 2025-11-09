@@ -39,16 +39,8 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
       return;
     }
 
-    try {
-      await _wcService.connectFromUri(uri);
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to pair: $error')),
-      );
-    }
+    // ignore: discarded_futures
+    _wcService.connectFromUri(uri);
   }
 
   @override
@@ -66,9 +58,8 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
         final WcState wcState = _wcService.state.value;
         final bool isPairing =
             wcState.status == WcStatus.pairing || wcState.status == WcStatus.proposed;
-        final String? error = wcState.status == WcStatus.error
-            ? wcState.message
-            : _service.pairingError;
+        final String? error =
+            wcState.status == WcStatus.error ? wcState.message : null;
         final WalletConnectSessionInfo? session = _service.primarySessionInfo;
         return Scaffold(
           appBar: AppBar(
