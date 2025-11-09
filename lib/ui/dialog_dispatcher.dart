@@ -41,6 +41,7 @@ class DialogDispatcher {
     }
 
     _showing = true;
+    SchedulerBinding.instance.scheduleFrame();
     SchedulerBinding.instance.addPostFrameCallback((_) async {
       final NavigatorState? navigator = navigatorKey.currentState;
       final BuildContext? context = navigatorKey.currentContext;

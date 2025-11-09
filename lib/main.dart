@@ -23,7 +23,9 @@ import 'wallet_connect_activity_screen.dart';
 import 'wallet_connect_manager.dart';
 import 'wallet_connect_models.dart';
 import 'wallet_connect_page.dart';
+import 'wallet_connect_popup_controller.dart';
 import 'ui/dialog_dispatcher.dart';
+import 'wc/wc_service.dart';
 late final WalletController _walletController;
 
 Future<void> main() async {
@@ -54,12 +56,15 @@ class WalletApp extends StatefulWidget {
 }
 
 class _WalletAppState extends State<WalletApp> with WidgetsBindingObserver {
+  StreamSubscription<WcUiEvent>? _wcUiSubscription;
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _syncInitialLifecycleState();
     unawaited(_initDesktopWindow());
+    _wcUiSubscription =
+        WalletConnectManager.instance.wcService.uiEvents.listen(_handleWcUiEvent);
   }
 
   Future<void> _initDesktopWindow() async {
@@ -91,6 +96,7 @@ class _WalletAppState extends State<WalletApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _wcUiSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -107,6 +113,20 @@ class _WalletAppState extends State<WalletApp> with WidgetsBindingObserver {
       navigatorKey: appNavigatorKey,
       home: WalletHomePage(controller: widget.controller),
     );
+  }
+
+  void _handleWcUiEvent(WcUiEvent event) {
+    final WalletConnectManager manager = WalletConnectManager.instance;
+    if (event is WcSessionProposalEvent ||
+        event is WcSessionEventEvent ||
+        event is WcSessionConnectEvent) {
+      final WalletConnectRequestLogEntry? pending = manager.firstPendingLog;
+      if (pending != null) {
+        WalletConnectPopupController.show(pending);
+      }
+    } else if (event is WcSessionDeleteEvent) {
+      WalletConnectPopupController.hide();
+    }
   }
 }
 

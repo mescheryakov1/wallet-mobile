@@ -214,6 +214,10 @@ class WalletConnectService extends ChangeNotifier {
       _client = client;
       wcService.attachClient(client);
 
+      // Ensure the underlying core/relay are fully started before draining
+      // any pending WalletConnect URIs on Android.
+      await client.init();
+
       await _loadPersistedSessions();
 
       client.onSessionProposal.subscribe(_onSessionProposal);
