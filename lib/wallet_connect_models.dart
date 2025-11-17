@@ -357,13 +357,14 @@ class WalletConnectRequestLogEntry {
 class WalletConnectRequestQueue extends ChangeNotifier {
   final List<WalletConnectRequestLogEntry> _entries =
       <WalletConnectRequestLogEntry>[];
+  final Set<int> _dismissedRequestIds = <int>{};
 
   List<WalletConnectRequestLogEntry> get entries =>
       List<WalletConnectRequestLogEntry>.unmodifiable(_entries);
 
   WalletConnectRequestLogEntry? get firstPendingLog {
     for (final WalletConnectRequestLogEntry entry in _entries) {
-      if (!entry.isDismissed &&
+      if (!isDismissed(entry.request.requestId) &&
           (entry.status == WalletConnectRequestStatus.pending ||
               entry.status == WalletConnectRequestStatus.broadcasting)) {
         return entry;
@@ -392,22 +393,18 @@ class WalletConnectRequestQueue extends ChangeNotifier {
   }
 
   void enqueue(WalletConnectRequestLogEntry entry) {
+    final WalletConnectRequestLogEntry normalizedEntry =
+        _applyDismissState(entry);
     final WalletConnectRequestLogEntry? existing =
         findById(entry.request.requestId);
     if (existing == null) {
-      _entries.add(entry);
+      _entries.add(normalizedEntry);
     } else {
       final int index = _entries.indexOf(existing);
-      final bool preserveDismissed = existing.isDismissed &&
-          entry.status == WalletConnectRequestStatus.pending;
-      final bool nextDismissed = preserveDismissed
-          ? true
-          : (existing.isDismissed || entry.isDismissed);
-      _entries[index] = entry.copyWith(
-        isDismissed: nextDismissed,
-        txHash: entry.txHash ?? existing.txHash,
-        type: entry.type,
-      );
+      _entries[index] = _applyDismissState(normalizedEntry.copyWith(
+        txHash: normalizedEntry.txHash ?? existing.txHash,
+        type: normalizedEntry.type,
+      ));
     }
     notifyListeners();
   }
@@ -446,6 +443,7 @@ class WalletConnectRequestQueue extends ChangeNotifier {
 
   void remove(int id) {
     _entries.removeWhere((entry) => entry.request.requestId == id);
+    _dismissedRequestIds.remove(id);
     notifyListeners();
   }
 
@@ -453,16 +451,52 @@ class WalletConnectRequestQueue extends ChangeNotifier {
 
   void dismiss(int requestId) {
     final WalletConnectRequestLogEntry? existing = findById(requestId);
-    if (existing == null || existing.status != WalletConnectRequestStatus.pending) {
+    if (existing == null ||
+        (existing.status != WalletConnectRequestStatus.pending &&
+            existing.status != WalletConnectRequestStatus.broadcasting)) {
       return;
     }
+    _dismissedRequestIds.add(requestId);
     final int index = _entries.indexOf(existing);
     _entries[index] = existing.copyWith(isDismissed: true);
     notifyListeners();
   }
 
+  bool isDismissed(int requestId) => _dismissedRequestIds.contains(requestId);
+
+  WalletConnectRequestLogEntry? requeue(int requestId) {
+    final WalletConnectRequestLogEntry? existing = findById(requestId);
+    if (existing == null ||
+        (existing.status != WalletConnectRequestStatus.pending &&
+            existing.status != WalletConnectRequestStatus.broadcasting)) {
+      return null;
+    }
+    _dismissedRequestIds.remove(requestId);
+    final int index = _entries.indexOf(existing);
+    final WalletConnectRequestLogEntry updated =
+        existing.copyWith(isDismissed: false);
+    _entries[index] = updated;
+    notifyListeners();
+    return updated;
+  }
+
   void clear() {
     _entries.clear();
+    _dismissedRequestIds.clear();
     notifyListeners();
+  }
+
+  WalletConnectRequestLogEntry _applyDismissState(
+    WalletConnectRequestLogEntry entry,
+  ) {
+    final int requestId = entry.request.requestId;
+    if (entry.isDismissed) {
+      _dismissedRequestIds.add(requestId);
+    }
+    final bool dismissed = _dismissedRequestIds.contains(requestId);
+    if (entry.isDismissed == dismissed) {
+      return entry;
+    }
+    return entry.copyWith(isDismissed: dismissed);
   }
 }
