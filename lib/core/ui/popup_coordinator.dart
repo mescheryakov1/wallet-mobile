@@ -29,6 +29,7 @@ class PopupCoordinator with WidgetsBindingObserver {
 
   void enqueue(PopupBuilder builder) {
     _queue.add(builder);
+    _scheduleDrainAfterFrame();
     _drain();
   }
 
@@ -44,7 +45,10 @@ class PopupCoordinator with WidgetsBindingObserver {
 
   Future<void> _drain() async {
     if (_showing) return;
-    if (_state != AppLifecycleState.resumed) return;
+    if (_state != AppLifecycleState.resumed) {
+      _scheduleDrainAfterFrame();
+      return;
+    }
     final nav = rootNavigatorKey.currentState;
     final ctx = rootNavigatorKey.currentContext;
     if (nav == null || ctx == null) {
