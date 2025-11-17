@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'wallet_connect_manager.dart';
 import 'wallet_connect_models.dart';
-import 'wc_request_approval_page.dart';
+import 'wallet_connect_popup_controller.dart';
 
 class WalletConnectActivityScreen extends StatelessWidget {
   const WalletConnectActivityScreen({super.key});
@@ -127,15 +127,7 @@ class _ActivityTile extends StatelessWidget {
                 alignment: Alignment.centerRight,
                 child: TextButton(
                   onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => WcRequestApprovalPage(
-                          requestId: request.requestId,
-                          manager: WalletConnectManager.instance,
-                        ),
-                        fullscreenDialog: true,
-                      ),
-                    );
+                    WalletConnectPopupController.show(entry);
                   },
                   child: const Text('Review'),
                 ),
