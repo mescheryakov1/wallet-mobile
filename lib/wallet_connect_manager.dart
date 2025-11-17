@@ -101,6 +101,15 @@ class WalletConnectManager extends ChangeNotifier {
     notifyListeners();
   }
 
+  void requeueRequest(int requestId) {
+    final WalletConnectRequestLogEntry? entry = requestQueue.requeue(requestId);
+    if (entry == null) {
+      return;
+    }
+    WalletConnectPopupController.show(entry);
+    notifyListeners();
+  }
+
   void _handleServiceUpdate() {
     notifyListeners();
   }

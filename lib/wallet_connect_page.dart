@@ -4,7 +4,6 @@ import 'network_config.dart';
 import 'wallet_connect_manager.dart';
 import 'wallet_connect_models.dart';
 import 'wallet_connect_pair_page.dart';
-import 'wc_request_approval_page.dart';
 
 class WalletConnectPage extends StatefulWidget {
   const WalletConnectPage({super.key});
@@ -104,17 +103,8 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => WcRequestApprovalPage(
-                      requestId: pendingLog.request.requestId,
-                      manager: _manager,
-                    ),
-                    fullscreenDialog: true,
-                  ),
-                );
-              },
+              onPressed: () =>
+                  _manager.requeueRequest(pendingLog.request.requestId),
               child: const Text('Review pending request'),
             ),
           ),

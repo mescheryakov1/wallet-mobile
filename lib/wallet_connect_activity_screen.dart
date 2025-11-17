@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import 'wallet_connect_manager.dart';
 import 'wallet_connect_models.dart';
-import 'wallet_connect_popup_controller.dart';
 
 class WalletConnectActivityScreen extends StatelessWidget {
   const WalletConnectActivityScreen({super.key});
@@ -127,7 +126,8 @@ class _ActivityTile extends StatelessWidget {
                 alignment: Alignment.centerRight,
                 child: TextButton(
                   onPressed: () {
-                    WalletConnectPopupController.show(entry);
+                    WalletConnectManager.instance
+                        .requeueRequest(entry.request.requestId);
                   },
                   child: const Text('Review'),
                 ),
