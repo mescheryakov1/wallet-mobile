@@ -56,7 +56,7 @@ class WalletConnectManager extends ChangeNotifier {
 
   List<WalletConnectRequestLogEntry> get activityLog => requestQueue.entries;
 
-  bool get hasPendingRequests => requestQueue.hasPending();
+  bool get hasPendingRequests => _firstActionableRequest() != null;
 
   Future<void> approveRequest(int requestId) async {
     final WalletConnectRequestLogEntry? entry = requestQueue.findById(requestId);

@@ -375,8 +375,9 @@ class WalletConnectRequestQueue extends ChangeNotifier {
 
   bool hasPending() {
     for (final WalletConnectRequestLogEntry entry in _entries) {
-      if (entry.status == WalletConnectRequestStatus.pending ||
-          entry.status == WalletConnectRequestStatus.broadcasting) {
+      if (!isDismissed(entry.request.requestId) &&
+          (entry.status == WalletConnectRequestStatus.pending ||
+              entry.status == WalletConnectRequestStatus.broadcasting)) {
         return true;
       }
     }
