@@ -59,14 +59,16 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
       builder: (BuildContext context, Widget? _) {
         final bool isPairing = _service.isPairing;
         final String? error = _service.pairingError;
-        final WalletConnectSessionInfo? session = _service.primarySessionInfo;
         return Scaffold(
           appBar: AppBar(
             title: const Text('Connect via URI'),
           ),
-          body: session != null
-              ? _buildConnectedBody(context, session)
-              : _buildConnectForm(isPairing: isPairing, error: error),
+          body: _buildConnectForm(
+            isPairing: isPairing,
+            error: error,
+            status: _service.status,
+            session: _service.primarySessionInfo,
+          ),
         );
       },
     );
@@ -75,12 +77,19 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
   Widget _buildConnectForm({
     required bool isPairing,
     required String? error,
+    required String status,
+    required WalletConnectSessionInfo? session,
   }) {
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text(
+            'Status: $status',
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 12),
           const Text(
             'Paste the WalletConnect URI provided by the dApp.',
           ),
@@ -131,120 +140,20 @@ class _WalletConnectPairPageState extends State<WalletConnectPairPage> {
               style: const TextStyle(color: Colors.redAccent),
             ),
           ],
+          if (session != null) ...[
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () async {
+                  await _service.disconnectSession(session.topic);
+                },
+                child: const Text('Disconnect'),
+              ),
+            ),
+          ],
         ],
       ),
-    );
-  }
-
-  Widget _buildConnectedBody(
-    BuildContext context,
-    WalletConnectSessionInfo session,
-  ) {
-    final List<String> chains = _service.getApprovedChains();
-    final List<String> methods = _service.getApprovedMethods();
-    final String? displayUrl = session.dappUrl;
-    final String? displayDescription = session.peerDescription;
-    final List<Widget> subtitleChildren = <Widget>[];
-    if (displayUrl != null && displayUrl.isNotEmpty) {
-      subtitleChildren.add(Text(displayUrl));
-    }
-    if (displayDescription != null && displayDescription.isNotEmpty) {
-      subtitleChildren.add(Text(displayDescription));
-    }
-    final Widget? subtitleWidget = subtitleChildren.isEmpty
-        ? null
-        : Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: subtitleChildren,
-          );
-    final List<Widget> chainWidgets = chains.isEmpty
-        ? const <Widget>[Text('No chains approved')]
-        : chains.map((chain) => Text(chain)).toList();
-    final List<Widget> methodWidgets = methods.isEmpty
-        ? const <Widget>[Text('No methods approved')]
-        : methods.map((method) => Text(method)).toList();
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _buildSectionCard(
-          context,
-          'Connected dApp',
-          [
-            ListTile(
-              leading:
-                  _buildPeerAvatar(session.iconUrl, session.dappName ?? ''),
-              title: Text(session.dappName ?? 'Connected dApp'),
-              subtitle: subtitleWidget,
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        _buildSectionCard(
-          context,
-          'Session permissions',
-          [
-            const Text(
-              'Chains',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            ...chainWidgets,
-            const SizedBox(height: 16),
-            const Text(
-              'Methods',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            ...methodWidgets,
-          ],
-        ),
-        const SizedBox(height: 24),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton(
-            onPressed: () async {
-              await _service.disconnectSession(session.topic);
-            },
-            child: const Text('Disconnect'),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSectionCard(
-    BuildContext context,
-    String title,
-    List<Widget> children,
-  ) {
-    final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: theme.textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 12),
-            ...children,
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPeerAvatar(String? iconUrl, String peerName) {
-    if (iconUrl == null || iconUrl.isEmpty) {
-      final String trimmed = peerName.trim();
-      final String initial = trimmed.isNotEmpty ? trimmed[0].toUpperCase() : 'D';
-      return CircleAvatar(child: Text(initial));
-    }
-    return CircleAvatar(
-      backgroundImage: NetworkImage(iconUrl),
     );
   }
 }
