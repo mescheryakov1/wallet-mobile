@@ -75,14 +75,14 @@ class WalletConnectPopupController {
     }
     final manager = WalletConnectManager.instance;
     try {
-      final future = manager.approveRequest(entry.request.requestId);
-      hide();
-      await future;
+      final int requestId = entry.request.requestId;
+      manager.dismissRequest(requestId);
+      await manager.approveRequest(requestId);
       _showSnackBar('Request approved');
     } on StateError catch (_) {
-      hide();
       _showSnackBar('Request is no longer pending');
     } catch (error) {
+      manager.requeueRequest(entry.request.requestId);
       _showSnackBar('Failed to approve request: $error');
     }
   }
@@ -94,14 +94,14 @@ class WalletConnectPopupController {
     }
     final manager = WalletConnectManager.instance;
     try {
-      final future = manager.rejectRequest(entry.request.requestId);
-      hide();
-      await future;
+      final int requestId = entry.request.requestId;
+      manager.dismissRequest(requestId);
+      await manager.rejectRequest(requestId);
       _showSnackBar('Request rejected');
     } on StateError catch (_) {
-      hide();
       _showSnackBar('Request is no longer pending');
     } catch (error) {
+      manager.requeueRequest(entry.request.requestId);
       _showSnackBar('Failed to reject request: $error');
     }
   }
