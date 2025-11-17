@@ -32,23 +32,29 @@ class PopupCoordinator with WidgetsBindingObserver {
     _drain();
   }
 
+  void _scheduleDrainAfterFrame() {
+    if (_drainScheduled) return;
+    _drainScheduled = true;
+    WidgetsBinding.instance.ensureVisualUpdate();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _drainScheduled = false;
+      _drain();
+    });
+  }
+
   Future<void> _drain() async {
     if (_showing) return;
     if (_state != AppLifecycleState.resumed) return;
     final nav = rootNavigatorKey.currentState;
     final ctx = rootNavigatorKey.currentContext;
     if (nav == null || ctx == null) {
-      if (_drainScheduled) return;
-      _drainScheduled = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _drainScheduled = false;
-        _drain();
-      });
+      _scheduleDrainAfterFrame();
       return;
     }
     final next = _queue.isEmpty ? null : _queue.removeFirst();
     if (next == null) return;
     _showing = true;
+    WidgetsBinding.instance.ensureVisualUpdate();
     SchedulerBinding.instance.addPostFrameCallback((_) async {
       await showDialog<void>(
         context: ctx,

@@ -67,4 +67,33 @@ void main() {
 
     await tester.pumpAndSettle();
   });
+
+  testWidgets('schedules a frame when showing a queued popup', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        navigatorKey: rootNavigatorKey,
+        home: SizedBox.shrink(),
+      ),
+    );
+
+    await tester.pump();
+
+    expect(tester.binding.hasScheduledFrame, isFalse);
+
+    PopupCoordinator.I.enqueue((context) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Navigator.of(context, rootNavigator: true).pop();
+      });
+      return const AlertDialog(title: Text('Auto popup'));
+    });
+
+    expect(tester.binding.hasScheduledFrame, isTrue);
+
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Auto popup'), findsOneWidget);
+
+    await tester.pumpAndSettle();
+  });
 }
