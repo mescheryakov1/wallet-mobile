@@ -157,6 +157,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   bool _pairingInProgress = false;
   String? _pairingError;
   DateTime? _pairingStartTime;
+  Timer? _pairingWatchdogTimer;
   String? lastError;
   Completer<void>? _sessionProposalCompleter;
   WalletConnectPendingRequest? _pendingSessionProposal;
@@ -960,6 +961,84 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     );
   }
 
+  Duration _pairingWatchdogTimeout() {
+    final int attempts = maxPairingAttempts < 1 ? 1 : maxPairingAttempts;
+    const int baseSeconds = 30;
+    const int perAttemptSeconds = 5;
+    return Duration(seconds: baseSeconds + (attempts - 1) * perAttemptSeconds);
+  }
+
+  void _startPairingWatchdog() {
+    _pairingWatchdogTimer?.cancel();
+    final DateTime? startedAt = _pairingStartTime;
+    if (startedAt == null) {
+      return;
+    }
+
+    final Duration timeout = _pairingWatchdogTimeout();
+    _pairingWatchdogTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (timer) {
+        if (!_pairingInProgress) {
+          _stopPairingWatchdog();
+          return;
+        }
+
+        final DateTime? pairingStart = _pairingStartTime;
+        if (pairingStart == null) {
+          return;
+        }
+
+        final Duration elapsed = DateTime.now().difference(pairingStart);
+        if (elapsed >= timeout) {
+          unawaited(_handlePairingWatchdogTimeout(elapsed, timeout));
+        }
+      },
+    );
+  }
+
+  void _stopPairingWatchdog() {
+    _pairingWatchdogTimer?.cancel();
+    _pairingWatchdogTimer = null;
+  }
+
+  Future<void> _handlePairingWatchdogTimeout(
+    Duration elapsed,
+    Duration timeout,
+  ) async {
+    if (!_pairingInProgress) {
+      _stopPairingWatchdog();
+      return;
+    }
+
+    _stopPairingWatchdog();
+    _logPairingStage(
+      'pair watchdog triggered elapsed=${elapsed.inMilliseconds}ms '
+      'timeout=${timeout.inMilliseconds}ms platform=${_platformLabel()}',
+    );
+
+    final Completer<void>? completer = _sessionProposalCompleter;
+    _pairingInProgress = false;
+    _pairingError = 'Connection timed out. Please try again.';
+    lastError = _pairingError;
+    _status = 'pairing timeout';
+    _sessionProposalCompleter = null;
+    _pairingStartTime = null;
+    notifyListeners();
+
+    if (completer != null && !completer.isCompleted) {
+      completer.completeError(
+        TimeoutException(
+          'Pairing watchdog timeout after ${elapsed.inSeconds}s',
+        ),
+      );
+    }
+
+    await _restartHandlersAndSubscriptions(
+      reason: 'pairing watchdog timeout',
+    );
+  }
+
   Duration _clientInitRetryBackoff(int attempt) {
     final int multiplier = 1 << (attempt - 1);
     return Duration(
@@ -1070,6 +1149,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     _logPairingStage(
       'pair start uri=$trimmed at=${_pairingStartTime!.toIso8601String()}',
     );
+    _startPairingWatchdog();
     if (Platform.isAndroid) {
       debugPrint('WC: starting pair flow, preparing to set pairingInProgress');
     }
@@ -1116,6 +1196,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
           _logPairingStage(
             'pair attempt $attempt timed out at ${DateTime.now().toIso8601String()} error=${error.message}',
           );
+          _stopPairingWatchdog();
           _pairingInProgress = false;
           _status = 'error: ${error.message}';
           _pairingError = error.message;
@@ -1135,6 +1216,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
           _sessionProposalCompleter = Completer<void>();
           _pairingInProgress = true;
           _status = 'pairing retry';
+          _pairingStartTime ??= DateTime.now();
+          _startPairingWatchdog();
           notifyListeners();
         }
       }
@@ -1143,6 +1226,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       _pairingError = '$error';
       lastError = _pairingError;
       _status = 'error: $error';
+      _stopPairingWatchdog();
       _sessionProposalCompleter = null;
       _pairingStartTime = null;
       debugPrint('WalletConnect pair failed: $error\n$stackTrace');
@@ -1154,6 +1238,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     if (!_pairingInProgress &&
         (_sessionProposalCompleter == null ||
             (_sessionProposalCompleter?.isCompleted ?? false))) {
+      _stopPairingWatchdog();
       _pairingStartTime = null;
     }
   }
@@ -1419,6 +1504,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     }
 
     _pairingInProgress = false;
+    _stopPairingWatchdog();
 
     final metadata = proposal.proposer.metadata;
     final Set<String> chainSet = <String>{};
@@ -1567,6 +1653,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       WidgetsBinding.instance.removeObserver(this);
       _lifecycleObserverAttached = false;
     }
+    _stopPairingWatchdog();
     _setConnectionState(
       WalletConnectState.disconnected,
       reason: 'service disposed',
@@ -1903,6 +1990,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       _pairingError = reason ?? 'User rejected the request.';
       _pendingSessionProposal = null;
       lastError = _pairingError;
+      _stopPairingWatchdog();
     }
 
     final String message = reason ?? 'User rejected the request.';
