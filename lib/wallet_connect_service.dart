@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:walletconnect_flutter_v2/apis/sign_api/models/session_models.dart';
@@ -64,6 +65,14 @@ class _RequestValidationResult {
   final bool chainAllowed;
 }
 
+enum WalletConnectState {
+  disconnected,
+  initializing,
+  ready,
+  reconnecting,
+  failed,
+}
+
 class _NamespaceConfig {
   _NamespaceConfig({required this.isRequired});
 
@@ -86,7 +95,7 @@ class WalletConnectRequestException implements Exception {
   String toString() => message;
 }
 
-class WalletConnectService extends ChangeNotifier {
+class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   WalletConnectService({
     required this.walletApi,
     String? projectId,
@@ -94,14 +103,20 @@ class WalletConnectService extends ChangeNotifier {
     Duration? androidSessionProposalTimeout,
     int maxPairingAttempts = 3,
     Duration? initialPairingBackoff,
+    int clientInitMaxAttempts = 3,
+    Duration? initialClientBackoff,
   })  : projectId = projectId ?? _defaultWalletConnectProjectId,
         sessionProposalTimeout = sessionProposalTimeout ?? Duration.zero,
         androidSessionProposalTimeout =
             androidSessionProposalTimeout ?? const Duration(seconds: 25),
         maxPairingAttempts = maxPairingAttempts,
         initialPairingBackoff =
-            initialPairingBackoff ?? const Duration(seconds: 2) {
+            initialPairingBackoff ?? const Duration(seconds: 2),
+        clientInitMaxAttempts = clientInitMaxAttempts,
+        initialClientBackoff =
+            initialClientBackoff ?? const Duration(seconds: 2) {
     _attachWalletListenerIfNeeded();
+    _attachLifecycleObserver();
   }
 
   final LocalWalletApi walletApi;
@@ -110,12 +125,16 @@ class WalletConnectService extends ChangeNotifier {
   final Duration androidSessionProposalTimeout;
   final int maxPairingAttempts;
   final Duration initialPairingBackoff;
+  final int clientInitMaxAttempts;
+  final Duration initialClientBackoff;
 
   final List<String> activeSessions = [];
   final List<WalletConnectSessionInfo> _sessionInfos = [];
 
   SignClient? _client;
+  WalletConnectState _connectionState = WalletConnectState.disconnected;
   String _status = 'disconnected';
+  Future<void>? _initializationFuture;
   String debugLastProposalLog = '';
   String debugLastError = '';
   bool _handlersRegistered = false;
@@ -135,11 +154,13 @@ class WalletConnectService extends ChangeNotifier {
   final Set<int> _handledRequestIds = <int>{};
   final ListQueue<int> _handledRequestOrder = ListQueue<int>();
   bool _walletListenerAttached = false;
+  bool _lifecycleObserverAttached = false;
   final StreamController<WalletConnectRequestEvent>
       _requestEventsController =
       StreamController<WalletConnectRequestEvent>.broadcast();
 
   String get status => _status;
+  WalletConnectState get connectionState => _connectionState;
   String? get lastRequestDebug => _lastRequestDebug;
   String? get lastErrorDebug => _lastErrorDebug;
   bool get pairingInProgress => _pairingInProgress;
@@ -184,6 +205,17 @@ class WalletConnectService extends ChangeNotifier {
     await initWalletConnect();
   }
 
+  void _attachLifecycleObserver() {
+    if (_lifecycleObserverAttached) {
+      return;
+    }
+    final binding = WidgetsBinding.instance;
+    if (binding != null) {
+      binding.addObserver(this);
+      _lifecycleObserverAttached = true;
+    }
+  }
+
   void _attachWalletListenerIfNeeded() {
     if (_walletListenerAttached) {
       return;
@@ -201,57 +233,113 @@ class WalletConnectService extends ChangeNotifier {
     }
   }
 
+  void _setConnectionState(
+    WalletConnectState newState, {
+    String? reason,
+  }) {
+    final previous = _connectionState;
+    final hasReason = reason != null && reason.isNotEmpty;
+    _connectionState = newState;
+    _status = hasReason ? '${newState.name}: $reason' : newState.name;
+    final transitionLog =
+        'state $previous -> $newState${hasReason ? ' ($reason)' : ''}';
+    PopupCoordinator.I.log('WC:$transitionLog');
+    debugPrint('WC:$transitionLog');
+    notifyListeners();
+  }
+
   Future<void> initWalletConnect() async {
-    if (_client != null) {
-      return;
-    }
     _attachWalletListenerIfNeeded();
 
     if (projectId.isEmpty) {
-      _status = 'missing project id';
-      notifyListeners();
+      _setConnectionState(WalletConnectState.failed,
+          reason: 'missing project id');
       return;
     }
 
-    _status = 'initializing';
-    notifyListeners();
+    await _initializeClientWithBackoff(reason: 'init');
+  }
 
-    try {
-      PopupCoordinator.I.log('WC:init start');
-      final metadata = PairingMetadata(
-        name: 'Wallet Mobile',
-        description: 'Flutter wallet',
-        url: 'https://example.com',
-        icons: const ['https://example.com/icon.png'],
-      );
+  Future<void> _initializeClientWithBackoff({
+    bool forceReconnect = false,
+    String? reason,
+  }) {
+    _initializationFuture ??= _doInitializeClient(
+      forceReconnect: forceReconnect,
+      reason: reason,
+    ).whenComplete(() {
+      _initializationFuture = null;
+    });
 
-      final client = await SignClient.createInstance(
-        projectId: projectId,
-        metadata: metadata,
-      );
+    return _initializationFuture!;
+  }
 
-      _client = client;
-
-      await _loadPersistedSessions();
-
-      client.onSessionProposal.subscribe(_onSessionProposal);
-      client.onSessionRequest.subscribe(_onSessionRequest);
-      client.onSessionConnect.subscribe(_onSessionConnect);
-      client.onSessionDelete.subscribe(_onSessionDelete);
-
-      if (!_handlersRegistered) {
-        _registerAccountAndHandlers();
-      }
-
-      await _refreshActiveSessions();
-      _status = 'ready';
-      PopupCoordinator.I.log('WC:init done');
-    } catch (error, stackTrace) {
-      _status = 'error: $error';
-      debugPrint('WalletConnect init failed: $error\n$stackTrace');
+  Future<void> _doInitializeClient({
+    required bool forceReconnect,
+    String? reason,
+  }) async {
+    if (_client != null && !forceReconnect) {
+      return;
     }
 
-    notifyListeners();
+    if (forceReconnect && _client != null) {
+      _detachClient(_client!);
+      _client = null;
+    }
+
+    _setConnectionState(
+      forceReconnect
+          ? WalletConnectState.reconnecting
+          : WalletConnectState.initializing,
+      reason: reason,
+    );
+
+    final int attempts = clientInitMaxAttempts < 1 ? 1 : clientInitMaxAttempts;
+    Object? lastError;
+
+    for (int attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        PopupCoordinator.I.log('WC:init attempt $attempt/$attempts');
+        final metadata = PairingMetadata(
+          name: 'Wallet Mobile',
+          description: 'Flutter wallet',
+          url: 'https://example.com',
+          icons: const ['https://example.com/icon.png'],
+        );
+
+        final client = await SignClient.createInstance(
+          projectId: projectId,
+          metadata: metadata,
+        );
+
+        _client = client;
+        _attachClientSubscriptions(client);
+        _handlersRegistered = false;
+        _registerAccountAndHandlers();
+        await _loadPersistedSessions();
+        await _refreshActiveSessions();
+        _setConnectionState(WalletConnectState.ready, reason: reason);
+        PopupCoordinator.I.log('WC:init done');
+        return;
+      } catch (error, stackTrace) {
+        lastError = error;
+        debugPrint('WalletConnect init failed (attempt $attempt): $error\n$stackTrace');
+        if (attempt >= attempts) {
+          break;
+        }
+        final Duration delay = _clientInitRetryBackoff(attempt);
+        await Future<void>.delayed(delay);
+        _setConnectionState(
+          WalletConnectState.reconnecting,
+          reason: 'retrying after error: $error',
+        );
+      }
+    }
+
+    _setConnectionState(
+      WalletConnectState.failed,
+      reason: lastError?.toString(),
+    );
   }
 
   _RequestExtraction _extractRequestDetails(
@@ -721,20 +809,91 @@ class WalletConnectService extends ChangeNotifier {
     );
   }
 
+  Duration _clientInitRetryBackoff(int attempt) {
+    final int multiplier = 1 << (attempt - 1);
+    return Duration(
+      milliseconds: initialClientBackoff.inMilliseconds * multiplier,
+    );
+  }
+
+  void _attachClientSubscriptions(SignClient client) {
+    try {
+      client.onSessionProposal.unsubscribe(_onSessionProposal);
+    } catch (_) {
+      // ignored
+    }
+    try {
+      client.onSessionRequest.unsubscribe(_onSessionRequest);
+    } catch (_) {}
+    try {
+      client.onSessionConnect.unsubscribe(_onSessionConnect);
+    } catch (_) {}
+    try {
+      client.onSessionDelete.unsubscribe(_onSessionDelete);
+    } catch (_) {}
+
+    client.onSessionProposal.subscribe(_onSessionProposal);
+    client.onSessionRequest.subscribe(_onSessionRequest);
+    client.onSessionConnect.subscribe(_onSessionConnect);
+    client.onSessionDelete.subscribe(_onSessionDelete);
+  }
+
+  void _detachClient(SignClient client) {
+    try {
+      client.onSessionProposal.unsubscribe(_onSessionProposal);
+    } catch (_) {}
+    try {
+      client.onSessionRequest.unsubscribe(_onSessionRequest);
+    } catch (_) {}
+    try {
+      client.onSessionConnect.unsubscribe(_onSessionConnect);
+    } catch (_) {}
+    try {
+      client.onSessionDelete.unsubscribe(_onSessionDelete);
+    } catch (_) {}
+  }
+
+  Future<void> _restartHandlersAndSubscriptions({String? reason}) async {
+    final client = _client;
+    if (client == null) {
+      await _initializeClientWithBackoff(
+        forceReconnect: true,
+        reason: reason,
+      );
+      return;
+    }
+
+    _attachClientSubscriptions(client);
+    _handlersRegistered = false;
+    _registerAccountAndHandlers();
+  }
+
   void _logPairingStage(String message) {
     PopupCoordinator.I.log('WC:$message');
     debugPrint('WC:$message');
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _initializeClientWithBackoff(
+        forceReconnect: true,
+        reason: 'app resumed',
+      );
+    }
+  }
+
   Future<void> connectFromUri(String uri) async {
     if (_client == null) {
-      await initWalletConnect();
+      await _initializeClientWithBackoff(reason: 'pairing start');
     }
 
     final client = _client;
     if (client == null) {
-      _status = 'not initialized';
-      notifyListeners();
+      _setConnectionState(
+        WalletConnectState.failed,
+        reason: 'client unavailable for pairing',
+      );
       throw StateError('WalletConnect not initialized');
     }
 
@@ -813,6 +972,9 @@ class WalletConnectService extends ChangeNotifier {
           _pairingError = error.message;
           lastError = _pairingError;
           notifyListeners();
+          await _restartHandlersAndSubscriptions(
+            reason: 'session proposal timeout',
+          );
           if (attempt >= retries) {
             _pairingInProgress = false;
             _status = 'error: ${error.message}';
@@ -837,6 +999,7 @@ class WalletConnectService extends ChangeNotifier {
       _pairingStartTime = null;
       debugPrint('WalletConnect pair failed: $error\n$stackTrace');
       notifyListeners();
+      await _restartHandlersAndSubscriptions(reason: 'pairing error');
       rethrow;
     }
 
@@ -1187,12 +1350,14 @@ class WalletConnectService extends ChangeNotifier {
     }
     final t = sessionTopic(event) ?? '<unknown>';
     PopupCoordinator.I.log('WC:event session_connect topic:$t');
+    _setConnectionState(WalletConnectState.ready, reason: 'session connect');
     unawaited(_refreshActiveSessions());
   }
 
   void _onSessionDelete(SessionDelete? event) {
     _status = 'ready';
     _clearPendingRequest();
+    _setConnectionState(WalletConnectState.ready, reason: 'session deleted');
     unawaited(_refreshActiveSessions());
   }
 
@@ -1250,6 +1415,14 @@ class WalletConnectService extends ChangeNotifier {
     if (!_requestEventsController.isClosed) {
       _requestEventsController.close();
     }
+    if (_lifecycleObserverAttached) {
+      WidgetsBinding.instance.removeObserver(this);
+      _lifecycleObserverAttached = false;
+    }
+    _setConnectionState(
+      WalletConnectState.disconnected,
+      reason: 'service disposed',
+    );
     super.dispose();
   }
 
@@ -1796,6 +1969,7 @@ class WalletConnectService extends ChangeNotifier {
     debugLastError = '';
     _lastErrorDebug = '';
     _status = 'connected';
+    _setConnectionState(WalletConnectState.ready, reason: 'proposal approved');
     notifyListeners();
     await _refreshActiveSessions();
     return 'session approved';
