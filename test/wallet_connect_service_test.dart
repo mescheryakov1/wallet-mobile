@@ -13,6 +13,7 @@ import 'package:web3dart/web3dart.dart';
 
 import 'package:wallet_mobile/local_wallet_api.dart';
 import 'package:wallet_mobile/network_config.dart';
+import 'package:wallet_mobile/wallet_connect_models.dart';
 import 'package:wallet_mobile/wallet_connect_service.dart';
 
 class _MockSignClient extends Mock implements SignClient {}
@@ -145,5 +146,99 @@ void main() {
       expect(service.pairingError, isNull);
       expect(service.pendingSessionProposal, isNotNull);
     });
+  });
+
+  test('queues incoming requests without cancelling active one', () async {
+    final walletApi = _FakeWalletApi(
+      EthereumAddress.fromHex('0x0000000000000000000000000000000000000001'),
+    );
+    final service = WalletConnectService(walletApi: walletApi);
+
+    final List<WalletConnectRequestEvent> events = <WalletConnectRequestEvent>[];
+    service.requestEvents.listen(events.add);
+
+    final WalletConnectPendingRequest first = WalletConnectPendingRequest(
+      topic: 't1',
+      requestId: 1,
+      method: 'personal_sign',
+      params: const ['0xabc', '0xdef'],
+    );
+    final WalletConnectPendingRequest second = WalletConnectPendingRequest(
+      topic: 't1',
+      requestId: 2,
+      method: 'eth_sendTransaction',
+      params: const [<String, String>{'from': '0x0', 'to': '0x1'}],
+    );
+    final WalletConnectPendingRequest third = WalletConnectPendingRequest(
+      topic: 't1',
+      requestId: 3,
+      method: 'personal_sign',
+      params: const ['0x123', '0x456'],
+    );
+
+    final List<Future<String>> requestFutures = <Future<String>>[
+      service.enqueueRequestForTesting(first),
+      service.enqueueRequestForTesting(second),
+      service.enqueueRequestForTesting(third),
+    ];
+
+    expect(service.pendingRequest?.requestId, 1);
+    expect(service.queuedRequests.map((request) => request.requestId),
+        orderedEquals(<int>[1, 2, 3]));
+
+    final pendingEvents = events
+        .where((event) => event.status == WalletConnectRequestStatus.pending)
+        .map((event) => event.request.requestId)
+        .toList(growable: false);
+    expect(pendingEvents, orderedEquals(<int>[1, 2, 3]));
+
+    expect(() => service.approveRequest('2'), throwsStateError);
+    expect(() => service.rejectRequest('2'), throwsStateError);
+
+    await service.rejectRequest('1');
+    expect(service.pendingRequest?.requestId, 2);
+    await service.rejectRequest('2');
+    expect(service.pendingRequest?.requestId, 3);
+    await service.rejectRequest('3');
+
+    for (final Future<String> future in requestFutures) {
+      await expectLater(future, throwsA(isA<WalletConnectError>()));
+    }
+
+    expect(service.pendingRequest, isNull);
+    expect(service.queuedRequests, isEmpty);
+  });
+
+  test('WalletConnectRequestQueue preserves first pending entry order', () {
+    final queue = WalletConnectRequestQueue();
+
+    final WalletConnectRequestLogEntry first = WalletConnectRequestLogEntry(
+      request: WalletConnectPendingRequest(
+        topic: 't1',
+        requestId: 10,
+        method: 'personal_sign',
+        params: const ['0x0'],
+      ),
+      status: WalletConnectRequestStatus.pending,
+      timestamp: DateTime.utc(2024, 1, 1),
+    );
+
+    final WalletConnectRequestLogEntry second = WalletConnectRequestLogEntry(
+      request: WalletConnectPendingRequest(
+        topic: 't1',
+        requestId: 11,
+        method: 'eth_sendTransaction',
+        params: const [<String, String>{'from': '0x0', 'to': '0x1'}],
+      ),
+      status: WalletConnectRequestStatus.pending,
+      timestamp: DateTime.utc(2024, 1, 2),
+    );
+
+    queue.enqueue(first);
+    queue.enqueue(second);
+
+    expect(queue.firstPendingLog?.request.requestId, 10);
+    expect(queue.entries.map((entry) => entry.request.requestId),
+        orderedEquals(<int>[10, 11]));
   });
 }

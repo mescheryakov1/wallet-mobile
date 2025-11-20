@@ -73,6 +73,13 @@ enum WalletConnectState {
   failed,
 }
 
+class _QueuedRequest {
+  _QueuedRequest(this.request) : completer = Completer<String>();
+
+  final WalletConnectPendingRequest request;
+  final Completer<String> completer;
+}
+
 class _NamespaceConfig {
   _NamespaceConfig({required this.isRequired});
 
@@ -149,6 +156,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   WalletConnectPendingRequest? _pendingRequest;
   WalletConnectSessionInfo? _activeSession;
   Completer<String>? _pendingRequestCompleter;
+  final ListQueue<_QueuedRequest> _pendingRequestQueue = ListQueue<_QueuedRequest>();
   WalletConnectActivityEntry? _lastActivityEntry;
   final Set<int> _processingRequestIds = <int>{};
   final Set<int> _handledRequestIds = <int>{};
@@ -169,6 +177,17 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   WalletConnectPendingRequest? get pendingSessionProposal =>
       _pendingSessionProposal;
   WalletConnectPendingRequest? get pendingRequest => _pendingRequest;
+  @visibleForTesting
+  List<WalletConnectPendingRequest> get queuedRequests =>
+      List<WalletConnectPendingRequest>.unmodifiable(
+        _pendingRequestQueue.map((request) => request.request),
+      );
+  @visibleForTesting
+  Future<String> enqueueRequestForTesting(
+    WalletConnectPendingRequest request,
+  ) {
+    return _enqueuePendingRequest(request);
+  }
   @visibleForTesting
   void setTestingClient(SignClient client) {
     _client = client;
@@ -245,6 +264,13 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         'state $previous -> $newState${hasReason ? ' ($reason)' : ''}';
     PopupCoordinator.I.log('WC:$transitionLog');
     debugPrint('WC:$transitionLog');
+    if (newState == WalletConnectState.disconnected ||
+        newState == WalletConnectState.failed) {
+      _cancelPendingCompleterIfActive(
+        reason: reason ?? 'Connection closed.',
+        clearQueued: true,
+      );
+    }
     notifyListeners();
   }
 
@@ -646,14 +672,54 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     return null;
   }
 
-  void _clearPendingRequest() {
-    if (_pendingRequest != null) {
-      if (identical(_pendingRequest, _pendingSessionProposal)) {
-        _pendingSessionProposal = null;
-      }
-      _pendingRequest = null;
-      notifyListeners();
+  Future<String> _enqueuePendingRequest(
+    WalletConnectPendingRequest request,
+  ) {
+    final queued = _QueuedRequest(request);
+    _pendingRequestQueue.addLast(queued);
+    if (_pendingRequestQueue.length == 1) {
+      _syncActiveRequestFromQueue();
     }
+    notifyListeners();
+    return queued.completer.future;
+  }
+
+  void _syncActiveRequestFromQueue() {
+    if (_pendingRequestQueue.isEmpty) {
+      _pendingRequest = null;
+      _pendingSessionProposal = null;
+      _pendingRequestCompleter = null;
+      return;
+    }
+    final _QueuedRequest active = _pendingRequestQueue.first;
+    _pendingRequest = active.request;
+    _pendingRequestCompleter = active.completer;
+    _pendingSessionProposal =
+        active.request.method == 'session_proposal' ? active.request : null;
+  }
+
+  void _advanceRequestQueue({bool clearRemainingQueue = false}) {
+    if (_pendingRequestQueue.isNotEmpty) {
+      _pendingRequestQueue.removeFirst();
+    }
+    _pendingRequestCompleter = null;
+    _pendingRequest = null;
+    _pendingSessionProposal = null;
+    if (clearRemainingQueue) {
+      while (_pendingRequestQueue.isNotEmpty) {
+        final _QueuedRequest queued = _pendingRequestQueue.removeFirst();
+        if (!queued.completer.isCompleted) {
+          queued.completer.completeError(
+            WalletConnectError(
+              code: 4001,
+              message: 'Request cancelled.',
+            ),
+          );
+        }
+      }
+    }
+    _syncActiveRequestFromQueue();
+    notifyListeners();
   }
 
   void _markRequestHandled(int requestId) {
@@ -1290,9 +1356,6 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       }
     });
 
-    _cancelPendingCompleterIfActive();
-    _pendingRequestCompleter = Completer<String>();
-
     final Map<String, Object?> proposalDetails = <String, Object?>{
       'proposalId': event.id,
       'namespaces': namespaces,
@@ -1318,8 +1381,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       chainId: chainSet.isNotEmpty ? chainSet.first : null,
     );
 
-    _pendingRequest = request;
-    _pendingSessionProposal = request;
+    await _enqueuePendingRequest(request);
     lastError = null;
     _lastRequestDebug =
         'session_proposal from ${metadata.name} chains=${chainSet.join(', ')}';
@@ -1356,7 +1418,10 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
 
   void _onSessionDelete(SessionDelete? event) {
     _status = 'ready';
-    _clearPendingRequest();
+    _cancelPendingCompleterIfActive(
+      reason: 'Session deleted.',
+      clearQueued: true,
+    );
     _setConnectionState(WalletConnectState.ready, reason: 'session deleted');
     unawaited(_refreshActiveSessions());
   }
@@ -1502,9 +1567,6 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<String> _handlePersonalSign(String topic, dynamic params) async {
-    _cancelPendingCompleterIfActive();
-
-    _pendingRequestCompleter = Completer<String>();
     final extraction = _extractRequestDetails(topic, 'personal_sign', params);
     final request = WalletConnectPendingRequest(
       topic: topic,
@@ -1521,8 +1583,6 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         chainId: extraction.chainId,
       );
     } on WalletConnectError catch (error) {
-      _pendingRequestCompleter = null;
-      _pendingRequest = null;
       _lastRequestDebug =
           'auto-reject personal_sign on ${extraction.chainId ?? 'unknown chain'}: ${error.message}';
       _lastErrorDebug = 'auto reject ${error.code}: ${error.message}';
@@ -1548,24 +1608,17 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     _lastRequestDebug =
         'personal_sign chain=$chainLabel topic=$topic params=${extraction.params}';
     _lastErrorDebug = '';
-    _pendingRequest = request;
+    final Future<String> requestFuture = _enqueuePendingRequest(request);
     _emitRequestEvent(
       status: WalletConnectRequestStatus.pending,
       request: request,
     );
     notifyListeners();
 
-    try {
-      return await _pendingRequestCompleter!.future;
-    } finally {
-      _pendingRequestCompleter = null;
-    }
+    return requestFuture;
   }
 
   Future<String> _handleEthSendTransaction(String topic, dynamic params) async {
-    _cancelPendingCompleterIfActive();
-
-    _pendingRequestCompleter = Completer<String>();
     final extraction =
         _extractRequestDetails(topic, 'eth_sendTransaction', params);
     final request = WalletConnectPendingRequest(
@@ -1583,8 +1636,6 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         chainId: extraction.chainId,
       );
     } on WalletConnectError catch (error) {
-      _pendingRequestCompleter = null;
-      _pendingRequest = null;
       _lastRequestDebug =
           'auto-reject eth_sendTransaction on ${extraction.chainId ?? 'unknown chain'}: ${error.message}';
       _lastErrorDebug = 'auto reject ${error.code}: ${error.message}';
@@ -1610,42 +1661,55 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     _lastRequestDebug =
         'eth_sendTransaction chain=$chainLabel topic=$topic params=${extraction.params}';
     _lastErrorDebug = '';
-    _pendingRequest = request;
+    final Future<String> requestFuture = _enqueuePendingRequest(request);
     _emitRequestEvent(
       status: WalletConnectRequestStatus.pending,
       request: request,
     );
     notifyListeners();
 
-    try {
-      return await _pendingRequestCompleter!.future;
-    } finally {
-      _pendingRequestCompleter = null;
-    }
+    return requestFuture;
   }
 
-  void _cancelPendingCompleterIfActive() {
-    final completer = _pendingRequestCompleter;
-    final WalletConnectPendingRequest? request = _pendingRequest;
-    if (completer != null && !completer.isCompleted) {
+  void _cancelPendingCompleterIfActive({
+    String? reason,
+    bool clearQueued = false,
+  }) {
+    if (_pendingRequestQueue.isEmpty) {
+      return;
+    }
+
+    final _QueuedRequest active = _pendingRequestQueue.first;
+    final WalletConnectPendingRequest request = active.request;
+    final Completer<String> completer = active.completer;
+    final String message =
+        reason ?? 'Request cancelled because the session is no longer active.';
+
+    if (!completer.isCompleted) {
       completer.completeError(
         WalletConnectError(
           code: 4001,
-          message: 'User rejected the request.',
+          message: message,
         ),
       );
     }
-    _pendingRequestCompleter = null;
-    if (request != null) {
-      _processingRequestIds.remove(request.requestId);
-      _markRequestHandled(request.requestId);
-      _emitRequestEvent(
-        status: WalletConnectRequestStatus.rejected,
-        request: request,
-        error: 'Request superseded by a new call.',
-      );
-      _clearPendingRequest();
-    }
+
+    _processingRequestIds.remove(request.requestId);
+    _markRequestHandled(request.requestId);
+    _emitRequestEvent(
+      status: WalletConnectRequestStatus.rejected,
+      request: request,
+      error: message,
+    );
+    _recordActivity(
+      method: request.method,
+      status: WalletConnectRequestStatus.rejected,
+      summary: message,
+      chainId: request.chainId,
+      requestId: request.requestId,
+      error: message,
+    );
+    _advanceRequestQueue(clearRemainingQueue: clearQueued);
   }
 
   int _parseRequestId(String requestId) {
@@ -1749,7 +1813,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     _markRequestHandled(requestId);
     _pendingRequestCompleter = null;
     _processingRequestIds.remove(requestId);
-    _clearPendingRequest();
+    _advanceRequestQueue();
   }
 
   Future<void> approveRequest(String requestId) async {
@@ -1854,7 +1918,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     } finally {
       _pendingRequestCompleter = null;
       _processingRequestIds.remove(requestId);
-      _clearPendingRequest();
+      _advanceRequestQueue();
     }
   }
 
