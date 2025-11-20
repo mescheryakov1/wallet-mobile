@@ -717,6 +717,9 @@ class WalletConnectService extends ChangeNotifier {
     _pairingError = null;
     lastError = null;
     _pendingSessionProposal = null;
+    if (Platform.isAndroid) {
+      debugPrint('WC: starting pair flow, preparing to set pairingInProgress');
+    }
     _pairingInProgress = true;
     _status = 'pairing';
     notifyListeners();
@@ -738,6 +741,9 @@ class WalletConnectService extends ChangeNotifier {
 
     try {
       await client.pair(uri: parsed);
+      if (Platform.isAndroid) {
+        debugPrint('WC: client.pair returned without throwing');
+      }
 
       if (sessionProposalTimeout != Duration.zero) {
         try {
@@ -800,6 +806,10 @@ class WalletConnectService extends ChangeNotifier {
     final client = _client;
     if (client == null || event == null) {
       return;
+    }
+
+    if (Platform.isAndroid) {
+      debugPrint('WC: _onSessionProposal invoked');
     }
 
     _pairingInProgress = false;
