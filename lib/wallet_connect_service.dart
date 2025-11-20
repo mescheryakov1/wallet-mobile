@@ -90,12 +90,26 @@ class WalletConnectService extends ChangeNotifier {
   WalletConnectService({
     required this.walletApi,
     String? projectId,
-  })  : projectId = projectId ?? _defaultWalletConnectProjectId {
+    Duration? sessionProposalTimeout,
+    Duration? androidSessionProposalTimeout,
+    int maxPairingAttempts = 3,
+    Duration? initialPairingBackoff,
+  })  : projectId = projectId ?? _defaultWalletConnectProjectId,
+        sessionProposalTimeout = sessionProposalTimeout ?? Duration.zero,
+        androidSessionProposalTimeout =
+            androidSessionProposalTimeout ?? const Duration(seconds: 25),
+        maxPairingAttempts = maxPairingAttempts,
+        initialPairingBackoff =
+            initialPairingBackoff ?? const Duration(seconds: 2) {
     _attachWalletListenerIfNeeded();
   }
 
   final LocalWalletApi walletApi;
   final String projectId;
+  final Duration sessionProposalTimeout;
+  final Duration androidSessionProposalTimeout;
+  final int maxPairingAttempts;
+  final Duration initialPairingBackoff;
 
   final List<String> activeSessions = [];
   final List<WalletConnectSessionInfo> _sessionInfos = [];
@@ -109,6 +123,7 @@ class WalletConnectService extends ChangeNotifier {
   String? _lastErrorDebug;
   bool _pairingInProgress = false;
   String? _pairingError;
+  DateTime? _pairingStartTime;
   String? lastError;
   Completer<void>? _sessionProposalCompleter;
   WalletConnectPendingRequest? _pendingSessionProposal;
@@ -133,6 +148,11 @@ class WalletConnectService extends ChangeNotifier {
   WalletConnectPendingRequest? get pendingSessionProposal =>
       _pendingSessionProposal;
   WalletConnectPendingRequest? get pendingRequest => _pendingRequest;
+  @visibleForTesting
+  void setTestingClient(SignClient client) {
+    _client = client;
+  }
+
   List<WalletConnectSessionInfo> getActiveSessions() =>
       List<WalletConnectSessionInfo>.unmodifiable(_sessionInfos);
   bool get isConnected => _sessionInfos.isNotEmpty;
@@ -687,6 +707,25 @@ class WalletConnectService extends ChangeNotifier {
     );
   }
 
+  Duration _resolveSessionProposalTimeout() {
+    if (Platform.isAndroid) {
+      return androidSessionProposalTimeout;
+    }
+    return sessionProposalTimeout;
+  }
+
+  Duration _pairingRetryBackoff(int attempt) {
+    final int multiplier = 1 << (attempt - 1);
+    return Duration(
+      milliseconds: initialPairingBackoff.inMilliseconds * multiplier,
+    );
+  }
+
+  void _logPairingStage(String message) {
+    PopupCoordinator.I.log('WC:$message');
+    debugPrint('WC:$message');
+  }
+
   Future<void> connectFromUri(String uri) async {
     if (_client == null) {
       await initWalletConnect();
@@ -717,6 +756,10 @@ class WalletConnectService extends ChangeNotifier {
     _pairingError = null;
     lastError = null;
     _pendingSessionProposal = null;
+    _pairingStartTime = DateTime.now();
+    _logPairingStage(
+      'pair start uri=$trimmed at=${_pairingStartTime!.toIso8601String()}',
+    );
     if (Platform.isAndroid) {
       debugPrint('WC: starting pair flow, preparing to set pairingInProgress');
     }
@@ -735,37 +778,54 @@ class WalletConnectService extends ChangeNotifier {
     _sessionProposalCompleter = Completer<void>();
     final Completer<void>? sessionProposalCompleter = _sessionProposalCompleter;
 
-    final Duration sessionProposalTimeout = Platform.isAndroid
-        ? const Duration(seconds: 15)
-        : Duration.zero;
+    final Duration proposalTimeout = _resolveSessionProposalTimeout();
+    final int retries = maxPairingAttempts < 1 ? 1 : maxPairingAttempts;
 
     try {
-      await client.pair(uri: parsed);
-      if (Platform.isAndroid) {
-        debugPrint('WC: client.pair returned without throwing');
-      }
+      int attempt = 0;
+      while (attempt < retries && (sessionProposalCompleter?.isCompleted ?? false) == false) {
+        attempt += 1;
+        final DateTime attemptStart = DateTime.now();
+        _logPairingStage(
+          'pair attempt $attempt/$retries started at ${attemptStart.toIso8601String()} timeout=${proposalTimeout.inMilliseconds}ms',
+        );
+        await client.pair(uri: parsed);
+        _logPairingStage('pair attempt $attempt invoked client.pair');
 
-      if (sessionProposalTimeout != Duration.zero) {
+        if (proposalTimeout == Duration.zero) {
+          await sessionProposalCompleter!.future;
+          break;
+        }
+
         try {
           await sessionProposalCompleter!.future
-              .timeout(sessionProposalTimeout, onTimeout: () {
+              .timeout(proposalTimeout, onTimeout: () {
             throw TimeoutException(
-              'Timed out waiting for session proposal. Please try again.',
+              'Timed out waiting for session proposal',
             );
           });
+          break;
         } on TimeoutException catch (error) {
-          _pairingInProgress = false;
+          _logPairingStage(
+            'pair attempt $attempt timed out at ${DateTime.now().toIso8601String()} error=${error.message}',
+          );
+          _status = 'waiting for proposal';
           _pairingError = error.message;
           lastError = _pairingError;
-          _status = 'error: ${error.message}';
-          _sessionProposalCompleter = null;
-          try {
-            client.onSessionProposal.unsubscribe(_onSessionProposal);
-          } catch (_) {
-            // Ignored.
-          }
           notifyListeners();
-          return;
+          if (attempt >= retries) {
+            _pairingInProgress = false;
+            _status = 'error: ${error.message}';
+            _sessionProposalCompleter = null;
+            break;
+          }
+
+          final Duration delay = _pairingRetryBackoff(attempt);
+          _logPairingStage('scheduling retry in ${delay.inMilliseconds}ms');
+          await Future<void>.delayed(delay);
+          _pairingInProgress = true;
+          _status = 'pairing retry';
+          notifyListeners();
         }
       }
     } catch (error, stackTrace) {
@@ -774,9 +834,16 @@ class WalletConnectService extends ChangeNotifier {
       lastError = _pairingError;
       _status = 'error: $error';
       _sessionProposalCompleter = null;
+      _pairingStartTime = null;
       debugPrint('WalletConnect pair failed: $error\n$stackTrace');
       notifyListeners();
       rethrow;
+    }
+
+    if (!_pairingInProgress &&
+        (_sessionProposalCompleter == null ||
+            (_sessionProposalCompleter?.isCompleted ?? false))) {
+      _pairingStartTime = null;
     }
   }
 
@@ -815,6 +882,15 @@ class WalletConnectService extends ChangeNotifier {
     _pairingInProgress = false;
     _sessionProposalCompleter?.complete();
     _sessionProposalCompleter = null;
+    _pairingError = null;
+    lastError = null;
+
+    final DateTime now = DateTime.now();
+    final String startedAt = _pairingStartTime?.toIso8601String() ?? '<unknown>';
+    _logPairingStage(
+      'session proposal received at ${now.toIso8601String()} startedAt=$startedAt',
+    );
+    _pairingStartTime = null;
 
     debugLastProposalLog =
         'RAW event=${event.toString()} | params=${event.params.toString()}';
