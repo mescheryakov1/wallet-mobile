@@ -209,6 +209,79 @@ void main() {
     expect(service.queuedRequests, isEmpty);
   });
 
+  test('logs cancellation diagnostics without UI spam and formats errors', () async {
+    final walletApi = _FakeWalletApi(
+      EthereumAddress.fromHex('0x0000000000000000000000000000000000000001'),
+    );
+    final service = WalletConnectService(walletApi: walletApi);
+
+    final List<WalletConnectRequestEvent> events = <WalletConnectRequestEvent>[];
+    service.requestEvents.listen(events.add);
+
+    final List<String?> diagnostics = <String?>[];
+    final originalDebugPrint = debugPrint;
+    debugPrint = (String? message, {int? wrapWidth}) {
+      diagnostics.add(message);
+    };
+
+    addTearDown(() {
+      debugPrint = originalDebugPrint;
+      service.dispose();
+    });
+
+    const WalletConnectPendingRequest request = WalletConnectPendingRequest(
+      topic: 't-cancel',
+      requestId: 101,
+      method: 'personal_sign',
+      params: <Object>['0xabc', '0xdef'],
+    );
+
+    await service.enqueueRequestForTesting(request);
+
+    service.cancelActiveRequestForTesting(
+      reason: 'Pairing timeout after inactivity',
+      clearQueued: true,
+      source: 'test_cancel',
+    );
+
+    expect(events, isNotEmpty);
+    final WalletConnectRequestEvent event = events.last;
+    expect(event.status, WalletConnectRequestStatus.rejected);
+    expect(
+      event.error,
+      'auto_reject/timeout: Pairing timeout after inactivity (id=101, method=personal_sign)',
+    );
+
+    final String? lastLog = diagnostics.whereType<String>().last;
+    expect(lastLog, contains('source=test_cancel'));
+    expect(lastLog, contains('active=101/personal_sign'));
+    expect(lastLog, contains('queue=101'));
+    expect(lastLog, contains('platform='));
+  });
+
+  test('auto rejection errors encode cause for validation races', () async {
+    final walletApi = _FakeWalletApi(
+      EthereumAddress.fromHex('0x0000000000000000000000000000000000000001'),
+    );
+    final service = WalletConnectService(walletApi: walletApi);
+
+    final List<WalletConnectRequestEvent> events = <WalletConnectRequestEvent>[];
+    service.requestEvents.listen(events.add);
+
+    await expectLater(
+      service.handlePersonalSignForTesting('topic', <Object>['0xabc', '0xdef']),
+      throwsA(isA<WalletConnectError>()),
+    );
+
+    expect(events, isNotEmpty);
+    final WalletConnectRequestEvent event = events.last;
+    expect(event.status, WalletConnectRequestStatus.rejected);
+    expect(event.error, isNotNull);
+    expect(event.error, startsWith('auto_reject/race:'));
+    expect(event.error, contains('id='));
+    expect(event.error, contains('method=personal_sign'));
+  });
+
   test('WalletConnectRequestQueue preserves first pending entry order', () {
     final queue = WalletConnectRequestQueue();
 

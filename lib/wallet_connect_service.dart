@@ -73,6 +73,12 @@ enum WalletConnectState {
   failed,
 }
 
+enum _AutoRejectCause {
+  race,
+  sessionChange,
+  timeout,
+}
+
 class _QueuedRequest {
   _QueuedRequest(this.request) : completer = Completer<String>();
 
@@ -188,6 +194,14 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   ) {
     return _enqueuePendingRequest(request);
   }
+
+  @visibleForTesting
+  Future<String> handlePersonalSignForTesting(
+    String topic,
+    dynamic params,
+  ) {
+    return _handlePersonalSign(topic, params);
+  }
   @visibleForTesting
   void setTestingClient(SignClient client) {
     _client = client;
@@ -269,6 +283,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       _cancelPendingCompleterIfActive(
         reason: reason ?? 'Connection closed.',
         clearQueued: true,
+        source: '_setConnectionState',
       );
     }
     notifyListeners();
@@ -861,6 +876,72 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     );
   }
 
+  String _formatAutoRejectError({
+    required _AutoRejectCause cause,
+    required String detail,
+    int? requestId,
+    String? method,
+  }) {
+    final extras = <String>[];
+    if (requestId != null) {
+      extras.add('id=$requestId');
+    }
+    if (method != null) {
+      extras.add('method=$method');
+    }
+    final suffix = extras.isEmpty ? '' : ' (${extras.join(', ')})';
+    return 'auto_reject/${cause.name}: $detail$suffix';
+  }
+
+  _AutoRejectCause _inferAutoRejectCause(String? reason) {
+    final lowerReason = reason?.toLowerCase() ?? '';
+    if (lowerReason.contains('timeout')) {
+      return _AutoRejectCause.timeout;
+    }
+    if (lowerReason.contains('session') ||
+        lowerReason.contains('disconnect') ||
+        lowerReason.contains('connection')) {
+      return _AutoRejectCause.sessionChange;
+    }
+    return _AutoRejectCause.race;
+  }
+
+  void _logPendingCancellation({
+    required String source,
+    String? reason,
+    bool clearQueued = false,
+  }) {
+    if (_pendingRequestQueue.isEmpty) {
+      debugPrint(
+        'WC:cancel diag source=$source reason=${reason ?? 'n/a'} queue=0 platform=${_platformLabel()}',
+      );
+      return;
+    }
+
+    final _QueuedRequest active = _pendingRequestQueue.first;
+    final WalletConnectPendingRequest request = active.request;
+    final queueIds = _pendingRequestQueue
+        .map((queued) => queued.request.requestId)
+        .toList(growable: false);
+
+    debugPrint(
+      'WC:cancel diag source=$source reason=${reason ?? 'n/a'} '
+      'active=${request.requestId}/${request.method} '
+      'queue=${queueIds.join(',')} clearQueued=$clearQueued '
+      'platform=${_platformLabel()}',
+    );
+  }
+
+  String _platformLabel() {
+    if (Platform.isAndroid) {
+      return 'android';
+    }
+    if (Platform.isWindows) {
+      return 'windows';
+    }
+    return Platform.operatingSystem;
+  }
+
   Duration _resolveSessionProposalTimeout() {
     if (Platform.isAndroid) {
       return androidSessionProposalTimeout;
@@ -1421,6 +1502,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     _cancelPendingCompleterIfActive(
       reason: 'Session deleted.',
       clearQueued: true,
+      source: '_onSessionDelete',
     );
     _setConnectionState(WalletConnectState.ready, reason: 'session deleted');
     unawaited(_refreshActiveSessions());
@@ -1586,10 +1668,16 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       _lastRequestDebug =
           'auto-reject personal_sign on ${extraction.chainId ?? 'unknown chain'}: ${error.message}';
       _lastErrorDebug = 'auto reject ${error.code}: ${error.message}';
+      final formattedError = _formatAutoRejectError(
+        cause: _inferAutoRejectCause(error.message),
+        detail: error.message,
+        requestId: request.requestId,
+        method: request.method,
+      );
       _emitRequestEvent(
         status: WalletConnectRequestStatus.rejected,
         request: request,
-        error: error.message,
+        error: formattedError,
       );
       _recordActivity(
         method: 'personal_sign',
@@ -1597,7 +1685,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         summary: error.message,
         chainId: extraction.chainId,
         requestId: request.requestId,
-        error: error.message,
+        error: formattedError,
       );
       _markRequestHandled(request.requestId);
       notifyListeners();
@@ -1639,10 +1727,16 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       _lastRequestDebug =
           'auto-reject eth_sendTransaction on ${extraction.chainId ?? 'unknown chain'}: ${error.message}';
       _lastErrorDebug = 'auto reject ${error.code}: ${error.message}';
+      final formattedError = _formatAutoRejectError(
+        cause: _inferAutoRejectCause(error.message),
+        detail: error.message,
+        requestId: request.requestId,
+        method: request.method,
+      );
       _emitRequestEvent(
         status: WalletConnectRequestStatus.rejected,
         request: request,
-        error: error.message,
+        error: formattedError,
       );
       _recordActivity(
         method: 'eth_sendTransaction',
@@ -1650,7 +1744,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         summary: error.message,
         chainId: extraction.chainId,
         requestId: request.requestId,
-        error: error.message,
+        error: formattedError,
       );
       _markRequestHandled(request.requestId);
       notifyListeners();
@@ -1674,7 +1768,13 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   void _cancelPendingCompleterIfActive({
     String? reason,
     bool clearQueued = false,
+    String? source,
   }) {
+    _logPendingCancellation(
+      source: source ?? '_cancelPendingCompleterIfActive',
+      reason: reason,
+      clearQueued: clearQueued,
+    );
     if (_pendingRequestQueue.isEmpty) {
       return;
     }
@@ -1684,6 +1784,12 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     final Completer<String> completer = active.completer;
     final String message =
         reason ?? 'Request cancelled because the session is no longer active.';
+    final formattedError = _formatAutoRejectError(
+      cause: _inferAutoRejectCause(reason),
+      detail: message,
+      requestId: request.requestId,
+      method: request.method,
+    );
 
     if (!completer.isCompleted) {
       completer.completeError(
@@ -1699,7 +1805,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     _emitRequestEvent(
       status: WalletConnectRequestStatus.rejected,
       request: request,
-      error: message,
+      error: formattedError,
     );
     _recordActivity(
       method: request.method,
@@ -1707,9 +1813,22 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       summary: message,
       chainId: request.chainId,
       requestId: request.requestId,
-      error: message,
+      error: formattedError,
     );
     _advanceRequestQueue(clearRemainingQueue: clearQueued);
+  }
+
+  @visibleForTesting
+  void cancelActiveRequestForTesting({
+    String? reason,
+    bool clearQueued = false,
+    String? source,
+  }) {
+    _cancelPendingCompleterIfActive(
+      reason: reason,
+      clearQueued: clearQueued,
+      source: source ?? 'test',
+    );
   }
 
   int _parseRequestId(String requestId) {
