@@ -1,6 +1,7 @@
 import 'dart:collection';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
@@ -18,9 +19,15 @@ class PopupCoordinator with WidgetsBindingObserver {
   AppLifecycleState _state = AppLifecycleState.resumed;
   bool _navigatorRetryScheduled = false;
   bool _pendingLifecycleResume = false;
+  bool _initialized = false;
+  bool? _isWindowsOverride;
 
   void init() {
+    if (_initialized) {
+      return;
+    }
     WidgetsBinding.instance.addObserver(this);
+    _initialized = true;
   }
 
   @override
@@ -44,6 +51,17 @@ class PopupCoordinator with WidgetsBindingObserver {
   void enqueue(PopupBuilder builder) {
     log('Enqueue popup; queue length before enqueue=${_queue.length}');
     _queue.add(builder);
+    _drain();
+  }
+
+  void replaceWith(PopupBuilder builder) {
+    log(
+      'Replace popup queue; showing=$_showing, pendingLifecycle=$_pendingLifecycleResume, '
+      'queuedBefore=${_queue.length}',
+    );
+    _queue
+      ..clear()
+      ..add(builder);
     _drain();
   }
 
@@ -103,7 +121,7 @@ class PopupCoordinator with WidgetsBindingObserver {
       return true;
     }
 
-    final canResumeWhileVisibleOnWindows = Platform.isWindows &&
+    final canResumeWhileVisibleOnWindows = _isWindows &&
         (_state == AppLifecycleState.inactive || _state == AppLifecycleState.hidden);
 
     if (canResumeWhileVisibleOnWindows) {
@@ -134,6 +152,18 @@ class PopupCoordinator with WidgetsBindingObserver {
       _drain();
     });
   }
+
+  @visibleForTesting
+  void debugReset({bool? isWindowsOverride}) {
+    _queue.clear();
+    _showing = false;
+    _navigatorRetryScheduled = false;
+    _pendingLifecycleResume = false;
+    _state = AppLifecycleState.resumed;
+    _isWindowsOverride = isWindowsOverride;
+  }
+
+  bool get _isWindows => _isWindowsOverride ?? Platform.isWindows;
 
   void log(String msg) {
     // ignore: avoid_print
