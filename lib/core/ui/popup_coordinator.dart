@@ -15,6 +15,7 @@ class PopupCoordinator with WidgetsBindingObserver {
   final Queue<PopupBuilder> _queue = Queue<PopupBuilder>();
   bool _showing = false;
   AppLifecycleState _state = AppLifecycleState.resumed;
+  bool _retryScheduled = false;
 
   void init() {
     WidgetsBinding.instance.addObserver(this);
@@ -36,7 +37,21 @@ class PopupCoordinator with WidgetsBindingObserver {
     if (_state != AppLifecycleState.resumed) return;
     final nav = rootNavigatorKey.currentState;
     final ctx = rootNavigatorKey.currentContext;
-    if (nav == null || ctx == null) return;
+    if (nav == null || ctx == null) {
+      if (_queue.isNotEmpty && !_retryScheduled) {
+        // On Windows the UI tree may not be ready immediately after navigation
+        // changes, so scheduling a post-frame retry prevents missing queued
+        // popups when the navigator/context becomes available.
+        _retryScheduled = true;
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          _retryScheduled = false;
+          if (_queue.isNotEmpty) {
+            _drain();
+          }
+        });
+      }
+      return;
+    }
     final next = _queue.isEmpty ? null : _queue.removeFirst();
     if (next == null) return;
     _showing = true;
