@@ -3,6 +3,7 @@ package com.example.wallet_mobile
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
+import java.util.ArrayDeque
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -15,6 +16,8 @@ class MainActivity : FlutterActivity() {
     private val linkQueue: ArrayDeque<String> = ArrayDeque()
     private val queuedLinks: MutableSet<String> = mutableSetOf()
     private val dispatchedLinks: MutableSet<String> = mutableSetOf()
+    private val dispatchedOrder: ArrayDeque<String> = ArrayDeque()
+    private val maxDispatchedLinks = 64
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,6 +67,7 @@ class MainActivity : FlutterActivity() {
         }
 
         if (methodChannel == null) {
+            Log.d(logTag, "Method channel not yet ready; enqueueing link: $link")
             enqueueLink(link)
         } else {
             sendLink(link)
@@ -106,5 +110,14 @@ class MainActivity : FlutterActivity() {
         Log.d(logTag, "Dispatching link to Dart via method channel: $link")
         methodChannel?.invokeMethod("onLink", link)
         dispatchedLinks.add(link)
+        dispatchedOrder.addLast(link)
+        if (dispatchedOrder.size > maxDispatchedLinks) {
+            val evicted = dispatchedOrder.removeFirst()
+            dispatchedLinks.remove(evicted)
+            Log.d(
+                logTag,
+                "Trimmed dispatched cache to $maxDispatchedLinks entries by evicting: $evicted"
+            )
+        }
     }
 }
