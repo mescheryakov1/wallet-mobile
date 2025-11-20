@@ -120,17 +120,63 @@ class _WalletConnectPageState extends State<WalletConnectPage> {
                     style: theme.textTheme.bodySmall,
                   ),
                 ),
-                if (error != null)
-                  Flexible(
-                    child: Text(
-                      error,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.error),
-                      textAlign: TextAlign.end,
-                    ),
-                  ),
               ],
             ),
+            if (error != null) ...[
+              const SizedBox(height: 12),
+              Card(
+                color: theme.colorScheme.errorContainer,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.error_outline,
+                        color: theme.colorScheme.onErrorContainer,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Connection error',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onErrorContainer,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              error,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onErrorContainer,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: isPairing ? null : _pair,
+                                style: TextButton.styleFrom(
+                                  foregroundColor:
+                                      theme.colorScheme.onErrorContainer,
+                                ),
+                                child: const Text('Retry now'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,

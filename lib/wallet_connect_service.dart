@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
@@ -109,6 +110,7 @@ class WalletConnectService extends ChangeNotifier {
   bool _pairingInProgress = false;
   String? _pairingError;
   String? lastError;
+  Completer<void>? _sessionProposalCompleter;
   WalletConnectPendingRequest? _pendingSessionProposal;
   WalletConnectPendingRequest? _pendingRequest;
   WalletConnectSessionInfo? _activeSession;
@@ -727,14 +729,45 @@ class WalletConnectService extends ChangeNotifier {
       // Ignored: unsubscribe may throw if the handler was not yet attached.
     }
     client.onSessionProposal.subscribe(_onSessionProposal);
+    _sessionProposalCompleter = Completer<void>();
+    final Completer<void>? sessionProposalCompleter = _sessionProposalCompleter;
+
+    final Duration sessionProposalTimeout = Platform.isAndroid
+        ? const Duration(seconds: 15)
+        : Duration.zero;
 
     try {
       await client.pair(uri: parsed);
+
+      if (sessionProposalTimeout != Duration.zero) {
+        try {
+          await sessionProposalCompleter!.future
+              .timeout(sessionProposalTimeout, onTimeout: () {
+            throw TimeoutException(
+              'Timed out waiting for session proposal. Please try again.',
+            );
+          });
+        } on TimeoutException catch (error) {
+          _pairingInProgress = false;
+          _pairingError = error.message;
+          lastError = _pairingError;
+          _status = 'error: ${error.message}';
+          _sessionProposalCompleter = null;
+          try {
+            client.onSessionProposal.unsubscribe(_onSessionProposal);
+          } catch (_) {
+            // Ignored.
+          }
+          notifyListeners();
+          return;
+        }
+      }
     } catch (error, stackTrace) {
       _pairingInProgress = false;
       _pairingError = '$error';
       lastError = _pairingError;
       _status = 'error: $error';
+      _sessionProposalCompleter = null;
       debugPrint('WalletConnect pair failed: $error\n$stackTrace');
       notifyListeners();
       rethrow;
@@ -770,6 +803,8 @@ class WalletConnectService extends ChangeNotifier {
     }
 
     _pairingInProgress = false;
+    _sessionProposalCompleter?.complete();
+    _sessionProposalCompleter = null;
 
     debugLastProposalLog =
         'RAW event=${event.toString()} | params=${event.params.toString()}';
