@@ -33,22 +33,24 @@ class WalletConnectPopupController {
     final notifier = ValueNotifier<WalletConnectRequestLogEntry>(entry);
     _entryNotifier = notifier;
 
-    PopupCoordinator.I.enqueue((BuildContext context) {
-      if (_entryNotifier != notifier) {
-        SchedulerBinding.instance.addPostFrameCallback((_) {
-          final NavigatorState navigator = Navigator.of(context);
-          if (navigator.canPop()) {
-            navigator.pop();
-          }
-        });
-        return const SizedBox.shrink();
-      }
-      return WillPopScope(
-        onWillPop: () async => false,
-        child: _WalletConnectPopupDialog(
-          notifier: notifier,
-        ),
-      );
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      PopupCoordinator.I.enqueue((BuildContext context) {
+        if (_entryNotifier != notifier) {
+          SchedulerBinding.instance.addPostFrameCallback((_) {
+            final NavigatorState navigator = Navigator.of(context);
+            if (navigator.canPop()) {
+              navigator.pop();
+            }
+          });
+          return const SizedBox.shrink();
+        }
+        return WillPopScope(
+          onWillPop: () async => false,
+          child: _WalletConnectPopupDialog(
+            notifier: notifier,
+          ),
+        );
+      });
     });
   }
 
