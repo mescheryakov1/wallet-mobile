@@ -119,7 +119,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     int clientInitMaxAttempts = 3,
     Duration? initialClientBackoff,
   })  : projectId = projectId ?? _defaultWalletConnectProjectId,
-        sessionProposalTimeout = sessionProposalTimeout ?? Duration.zero,
+        sessionProposalTimeout =
+            sessionProposalTimeout ?? const Duration(seconds: 25),
         androidSessionProposalTimeout =
             androidSessionProposalTimeout ?? const Duration(seconds: 25),
         maxPairingAttempts = maxPairingAttempts,
@@ -946,6 +947,9 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     if (Platform.isAndroid) {
       return androidSessionProposalTimeout;
     }
+    if (sessionProposalTimeout == Duration.zero) {
+      return const Duration(seconds: 25);
+    }
     return sessionProposalTimeout;
   }
 
@@ -1082,14 +1086,14 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     }
     client.onSessionProposal.subscribe(_onSessionProposal);
     _sessionProposalCompleter = Completer<void>();
-    final Completer<void>? sessionProposalCompleter = _sessionProposalCompleter;
 
     final Duration proposalTimeout = _resolveSessionProposalTimeout();
     final int retries = maxPairingAttempts < 1 ? 1 : maxPairingAttempts;
 
     try {
       int attempt = 0;
-      while (attempt < retries && (sessionProposalCompleter?.isCompleted ?? false) == false) {
+      while (attempt < retries &&
+          ((_sessionProposalCompleter?.isCompleted ?? false) == false)) {
         attempt += 1;
         final DateTime attemptStart = DateTime.now();
         _logPairingStage(
@@ -1098,13 +1102,10 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         await client.pair(uri: parsed);
         _logPairingStage('pair attempt $attempt invoked client.pair');
 
-        if (proposalTimeout == Duration.zero) {
-          await sessionProposalCompleter!.future;
-          break;
-        }
-
         try {
-          await sessionProposalCompleter!.future
+          final Completer<void> sessionProposalCompleter =
+              _sessionProposalCompleter ??= Completer<void>();
+          await sessionProposalCompleter.future
               .timeout(proposalTimeout, onTimeout: () {
             throw TimeoutException(
               'Timed out waiting for session proposal',
@@ -1115,23 +1116,23 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
           _logPairingStage(
             'pair attempt $attempt timed out at ${DateTime.now().toIso8601String()} error=${error.message}',
           );
-          _status = 'waiting for proposal';
+          _pairingInProgress = false;
+          _status = 'error: ${error.message}';
           _pairingError = error.message;
           lastError = _pairingError;
           notifyListeners();
           await _restartHandlersAndSubscriptions(
             reason: 'session proposal timeout',
           );
+          _sessionProposalCompleter = null;
           if (attempt >= retries) {
-            _pairingInProgress = false;
-            _status = 'error: ${error.message}';
-            _sessionProposalCompleter = null;
             break;
           }
 
           final Duration delay = _pairingRetryBackoff(attempt);
           _logPairingStage('scheduling retry in ${delay.inMilliseconds}ms');
           await Future<void>.delayed(delay);
+          _sessionProposalCompleter = Completer<void>();
           _pairingInProgress = true;
           _status = 'pairing retry';
           notifyListeners();
