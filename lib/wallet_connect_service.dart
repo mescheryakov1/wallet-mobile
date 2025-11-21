@@ -225,6 +225,18 @@ class WalletConnectService extends ChangeNotifier {
         metadata: metadata,
       );
 
+      // Ensure the relay transport is fully started before proceeding.
+      // On Android the relay can remain disconnected after cold starts,
+      // causing the first pairing attempt to time out without a proposal.
+      try {
+        await client.core.start();
+        if (Platform.isAndroid) {
+          debugPrint('WC:initWalletConnect relay started (android)');
+        }
+      } catch (error) {
+        debugPrint('WC: relay start failed: $error');
+      }
+
       _client = client;
 
       await _loadPersistedSessions();
