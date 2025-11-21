@@ -119,8 +119,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     int clientInitMaxAttempts = 3,
     Duration? initialClientBackoff,
   })  : projectId = projectId ?? _defaultWalletConnectProjectId,
-        sessionProposalTimeout =
-            sessionProposalTimeout ?? const Duration(seconds: 25),
+        sessionProposalTimeout = sessionProposalTimeout ?? Duration.zero,
         androidSessionProposalTimeout =
             androidSessionProposalTimeout ?? const Duration(seconds: 25),
         maxPairingAttempts = maxPairingAttempts,
@@ -307,6 +306,9 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     bool forceReconnect = false,
     String? reason,
   }) {
+    _logPairingStage(
+      'init requested forceReconnect=$forceReconnect reason=$reason state=$_connectionState',
+    );
     _initializationFuture ??= _doInitializeClient(
       forceReconnect: forceReconnect,
       reason: reason,
@@ -356,6 +358,9 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         );
 
         _client = client;
+        _logPairingStage(
+          'init success reason=$reason relay=${_describeRelay(client)}',
+        );
         _attachClientSubscriptions(client);
         _handlersRegistered = false;
         _registerAccountAndHandlers();
@@ -948,9 +953,6 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     if (Platform.isAndroid) {
       return androidSessionProposalTimeout;
     }
-    if (sessionProposalTimeout == Duration.zero) {
-      return const Duration(seconds: 25);
-    }
     return sessionProposalTimeout;
   }
 
@@ -1084,6 +1086,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> _restartHandlersAndSubscriptions({String? reason}) async {
+    _logPairingStage('restart handlers reason=$reason');
     final client = _client;
     if (client == null) {
       await _initializeClientWithBackoff(
@@ -1103,8 +1106,32 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     debugPrint('WC:$message');
   }
 
+  void _logLifecycleChange(AppLifecycleState state, {String? reason}) {
+    _logPairingStage(
+      'lifecycle $state reason=$reason connection=$_connectionState pairing=$_pairingInProgress',
+    );
+  }
+
+  String _describeRelay(SignClient? client) {
+    if (client == null) {
+      return 'relay=uninitialized';
+    }
+
+    try {
+      final dynamic relayClient = client.core.relayClient;
+      final dynamic relayUrl = relayClient?.relayUrl ??
+          relayClient?.transport?.socket?.uri ??
+          relayClient?.transport?.wsUrl;
+      final dynamic protocol = relayClient?.protocol;
+      return 'relayUrl=$relayUrl protocol=$protocol';
+    } catch (error) {
+      return 'relay=unknown($error)';
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _logLifecycleChange(state, reason: 'widgets binding event');
     if (state == AppLifecycleState.resumed) {
       _initializeClientWithBackoff(
         forceReconnect: true,
@@ -1142,12 +1169,13 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       throw ArgumentError('Invalid WalletConnect URI: $error');
     }
 
+    final Duration proposalTimeout = _resolveSessionProposalTimeout();
     _pairingError = null;
     lastError = null;
     _pendingSessionProposal = null;
     _pairingStartTime = DateTime.now();
     _logPairingStage(
-      'pair start uri=$trimmed at=${_pairingStartTime!.toIso8601String()}',
+      'pair start uri=$trimmed at=${_pairingStartTime!.toIso8601String()} relay=${_describeRelay(client)} timeout=${proposalTimeout == Duration.zero ? 'disabled' : proposalTimeout.inMilliseconds}',
     );
     _startPairingWatchdog();
     if (Platform.isAndroid) {
@@ -1167,7 +1195,6 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     client.onSessionProposal.subscribe(_onSessionProposal);
     _sessionProposalCompleter = Completer<void>();
 
-    final Duration proposalTimeout = _resolveSessionProposalTimeout();
     final int retries = maxPairingAttempts < 1 ? 1 : maxPairingAttempts;
 
     try {
@@ -1185,12 +1212,16 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         try {
           final Completer<void> sessionProposalCompleter =
               _sessionProposalCompleter ??= Completer<void>();
-          await sessionProposalCompleter.future
-              .timeout(proposalTimeout, onTimeout: () {
-            throw TimeoutException(
-              'Timed out waiting for session proposal',
-            );
-          });
+          if (proposalTimeout == Duration.zero) {
+            await sessionProposalCompleter.future;
+          } else {
+            await sessionProposalCompleter.future
+                .timeout(proposalTimeout, onTimeout: () {
+              throw TimeoutException(
+                'Timed out waiting for session proposal',
+              );
+            });
+          }
           break;
         } on TimeoutException catch (error) {
           _logPairingStage(
@@ -1274,6 +1305,10 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     if (Platform.isAndroid) {
       debugPrint('WC: _onSessionProposal invoked');
     }
+
+    _logPairingStage(
+      'session proposal relay=${_describeRelay(client)} proposer=${event.params.proposer.metadata.name} chains=${event.params.requiredNamespaces.keys.join(',')}',
+    );
 
     _pairingInProgress = false;
     _sessionProposalCompleter?.complete();
@@ -1578,6 +1613,9 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     if (event == null) {
       return;
     }
+    _logPairingStage(
+      'session connect topic=${event.session.topic} relay=${_describeRelay(_client)} namespaces=${event.session.namespaces.keys.join(',')}',
+    );
     final t = sessionTopic(event) ?? '<unknown>';
     PopupCoordinator.I.log('WC:event session_connect topic:$t');
     _setConnectionState(WalletConnectState.ready, reason: 'session connect');
@@ -1585,6 +1623,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _onSessionDelete(SessionDelete? event) {
+    _logPairingStage('session deleted topic=${event?.topic} relay=${_describeRelay(_client)}');
     _status = 'ready';
     _cancelPendingCompleterIfActive(
       reason: 'Session deleted.',
@@ -1733,6 +1772,9 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     final t = sessionTopic(event) ?? '<unknown>';
     debugPrint(
       'WC session_request topic=$t method=$method',
+    );
+    _logPairingStage(
+      'session request id=${event.id} topic=$t method=$method relay=${_describeRelay(_client)}',
     );
   }
 
