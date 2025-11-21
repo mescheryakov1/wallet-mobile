@@ -33,6 +33,8 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Explicitly disable resource shrinking to avoid Gradle errors when code shrinking is off.
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android.txt"),
                 "proguard-walletconnect.pro"
@@ -43,6 +45,7 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android.txt"),
                 "proguard-walletconnect.pro"
