@@ -1133,12 +1133,22 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       return 'relay=uninitialized';
     }
 
+    dynamic _safeGet(dynamic Function() getter) {
+      try {
+        return getter();
+      } catch (_) {
+        return null;
+      }
+    }
+
     try {
       final dynamic relayClient = client.core.relayClient;
-      final dynamic relayUrl = relayClient?.relayUrl ??
-          relayClient?.transport?.socket?.uri ??
-          relayClient?.transport?.wsUrl;
-      final dynamic protocol = relayClient?.protocol;
+      final dynamic relayUrl = _safeGet(() => relayClient?.relayUrl) ??
+          _safeGet(() => relayClient?.transport?.socket?.uri) ??
+          _safeGet(() => relayClient?.transport?.wsUrl) ??
+          _safeGet(() => relayClient?.transportUrl) ??
+          _safeGet(() => relayClient?.url);
+      final dynamic protocol = _safeGet(() => relayClient?.protocol);
       return 'relayUrl=$relayUrl protocol=$protocol';
     } catch (error) {
       return 'relay=unknown($error)';
