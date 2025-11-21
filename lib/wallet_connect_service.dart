@@ -121,10 +121,9 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     int clientInitMaxAttempts = 3,
     Duration? initialClientBackoff,
   })  : projectId = projectId ?? _defaultWalletConnectProjectId,
-        sessionProposalTimeout =
-            sessionProposalTimeout ?? const Duration(seconds: 30),
+        sessionProposalTimeout = sessionProposalTimeout ?? Duration.zero,
         androidSessionProposalTimeout =
-            androidSessionProposalTimeout ?? const Duration(seconds: 25),
+            androidSessionProposalTimeout ?? Duration.zero,
         maxPairingAttempts = maxPairingAttempts,
         initialPairingBackoff =
             initialPairingBackoff ?? const Duration(seconds: 2),
