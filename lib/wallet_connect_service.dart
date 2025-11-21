@@ -1429,6 +1429,12 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
+      if (config.chains.isEmpty && chains.isEmpty) {
+        // Some dApps omit the chains list in their proposal; fall back to all
+        // supported chains so we can still pair instead of rejecting.
+        config.chains.addAll(_supportedChains.map((chain) => chain.toLowerCase()));
+      }
+
       final methods = namespace.methods ?? const <String>[];
       for (final method in methods) {
         config.methods.add(method.toLowerCase());
