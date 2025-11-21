@@ -50,8 +50,6 @@ class WalletConnectManager extends ChangeNotifier {
   }
 
   WalletConnectPendingRequest? get pendingRequest => service.pendingRequest;
-  List<WalletConnectPendingRequest> get queuedRequests =>
-      service.queuedRequests;
 
   WalletConnectRequestLogEntry? get firstPendingLog =>
       requestQueue.firstPendingLog;
