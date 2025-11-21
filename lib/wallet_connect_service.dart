@@ -2509,8 +2509,6 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       ..connectionTimeout = const Duration(seconds: 20)
       ..idleTimeout = const Duration(seconds: 30);
 
-    baseClient.findProxy = HttpClient.findProxyFromEnvironment;
-
     final Uri? parsed = Uri.tryParse(network.rpcUrl);
     if (parsed != null &&
         parsed.scheme.isNotEmpty &&
@@ -2519,8 +2517,9 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
           'RPC ${network.name} is using non-HTTPS scheme (${parsed.scheme}); verify endpoint configuration.');
     }
 
-    final String proxyDescription =
-        parsed == null ? '<default>' : baseClient.findProxy(parsed.toString());
+    final String proxyDescription = parsed == null
+        ? '<default>'
+        : HttpClient.findProxyFromEnvironment(parsed);
     _logNetwork(
       'windows http client ready rpc=${network.rpcUrl} proxy=$proxyDescription ca=${customCaPath?.isNotEmpty == true ? customCaPath : 'system'}',
     );
