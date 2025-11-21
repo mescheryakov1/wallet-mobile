@@ -714,9 +714,7 @@ class WalletConnectService extends ChangeNotifier {
   }
 
   Future<void> connectFromUri(String uri) async {
-    if (_client == null) {
-      await initWalletConnect();
-    }
+    await initWalletConnect();
 
     final client = _client;
     if (client == null) {
@@ -762,7 +760,7 @@ class WalletConnectService extends ChangeNotifier {
     final Completer<void>? sessionProposalCompleter = _sessionProposalCompleter;
 
     final Duration sessionProposalTimeout = Platform.isAndroid
-        ? const Duration(seconds: 15)
+        ? const Duration(seconds: 45)
         : Duration.zero;
 
     try {
@@ -806,6 +804,20 @@ class WalletConnectService extends ChangeNotifier {
     }
   }
 
+  void _resolveSessionProposalCompleter({Object? error}) {
+    final Completer<void>? completer = _sessionProposalCompleter;
+    if (completer == null || completer.isCompleted) {
+      return;
+    }
+
+    if (error != null) {
+      completer.completeError(error);
+    } else {
+      completer.complete();
+    }
+    _sessionProposalCompleter = null;
+  }
+
   Future<void> startPairing(String uri) => connectFromUri(uri);
 
   Future<void> disconnectSession(String topic) async {
@@ -839,8 +851,7 @@ class WalletConnectService extends ChangeNotifier {
     }
 
     _pairingInProgress = false;
-    _sessionProposalCompleter?.complete();
-    _sessionProposalCompleter = null;
+    _resolveSessionProposalCompleter();
 
     debugLastProposalLog =
         'RAW event=${event.toString()} | params=${event.params.toString()}';
@@ -1137,6 +1148,7 @@ class WalletConnectService extends ChangeNotifier {
     }
     final t = sessionTopic(event) ?? '<unknown>';
     PopupCoordinator.I.log('WC:event session_connect topic:$t');
+    _resolveSessionProposalCompleter();
     unawaited(_refreshActiveSessions());
   }
 
