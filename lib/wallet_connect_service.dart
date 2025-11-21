@@ -91,6 +91,10 @@ class WalletConnectService extends ChangeNotifier {
     required this.walletApi,
     String? projectId,
   })  : projectId = projectId ?? _defaultWalletConnectProjectId {
+    _requestEventsController =
+        StreamController<WalletConnectRequestEvent>.broadcast(
+      onListen: _replayLatestRequest,
+    );
     _attachWalletListenerIfNeeded();
   }
 
@@ -111,6 +115,7 @@ class WalletConnectService extends ChangeNotifier {
   String? _pairingError;
   String? lastError;
   Completer<void>? _sessionProposalCompleter;
+  Completer<void>? _initCompleter;
   WalletConnectPendingRequest? _pendingSessionProposal;
   WalletConnectPendingRequest? _pendingRequest;
   WalletConnectSessionInfo? _activeSession;
@@ -120,9 +125,9 @@ class WalletConnectService extends ChangeNotifier {
   final Set<int> _handledRequestIds = <int>{};
   final ListQueue<int> _handledRequestOrder = ListQueue<int>();
   bool _walletListenerAttached = false;
-  final StreamController<WalletConnectRequestEvent>
-      _requestEventsController =
-      StreamController<WalletConnectRequestEvent>.broadcast();
+  late final StreamController<WalletConnectRequestEvent>
+      _requestEventsController;
+  WalletConnectRequestEvent? _latestRequestEvent;
 
   String get status => _status;
   String? get lastRequestDebug => _lastRequestDebug;
@@ -160,9 +165,7 @@ class WalletConnectService extends ChangeNotifier {
   Stream<WalletConnectRequestEvent> get requestEvents =>
       _requestEventsController.stream;
 
-  Future<void> init() async {
-    await initWalletConnect();
-  }
+  Future<void> init() async => initWalletConnect();
 
   void _attachWalletListenerIfNeeded() {
     if (_walletListenerAttached) {
@@ -185,11 +188,20 @@ class WalletConnectService extends ChangeNotifier {
     if (_client != null) {
       return;
     }
+
+    final Completer<void>? pendingInit = _initCompleter;
+    if (pendingInit != null) {
+      return pendingInit.future;
+    }
+
+    _initCompleter = Completer<void>();
     _attachWalletListenerIfNeeded();
 
     if (projectId.isEmpty) {
       _status = 'missing project id';
       notifyListeners();
+      _initCompleter?.complete();
+      _initCompleter = null;
       return;
     }
 
@@ -198,6 +210,9 @@ class WalletConnectService extends ChangeNotifier {
 
     try {
       PopupCoordinator.I.log('WC:init start');
+      if (Platform.isAndroid) {
+        debugPrint('WC:initWalletConnect (android)');
+      }
       final metadata = PairingMetadata(
         name: 'Wallet Mobile',
         description: 'Flutter wallet',
@@ -209,6 +224,18 @@ class WalletConnectService extends ChangeNotifier {
         projectId: projectId,
         metadata: metadata,
       );
+
+      // Ensure the relay transport is fully started before proceeding.
+      // On Android the relay can remain disconnected after cold starts,
+      // causing the first pairing attempt to time out without a proposal.
+      try {
+        await client.core.start();
+        if (Platform.isAndroid) {
+          debugPrint('WC:initWalletConnect relay started (android)');
+        }
+      } catch (error) {
+        debugPrint('WC: relay start failed: $error');
+      }
 
       _client = client;
 
@@ -226,9 +253,12 @@ class WalletConnectService extends ChangeNotifier {
       await _refreshActiveSessions();
       _status = 'ready';
       PopupCoordinator.I.log('WC:init done');
+      _initCompleter?.complete();
     } catch (error, stackTrace) {
       _status = 'error: $error';
       debugPrint('WalletConnect init failed: $error\n$stackTrace');
+      _initCompleter?.completeError(error, stackTrace);
+      _initCompleter = null;
     }
 
     notifyListeners();
@@ -677,20 +707,26 @@ class WalletConnectService extends ChangeNotifier {
     if (_requestEventsController.isClosed) {
       return;
     }
-    _requestEventsController.add(
-      WalletConnectRequestEvent(
-        request: request,
-        status: status,
-        result: result,
-        error: error,
-      ),
+    final WalletConnectRequestEvent event = WalletConnectRequestEvent(
+      request: request,
+      status: status,
+      result: result,
+      error: error,
     );
+    _latestRequestEvent = event;
+    _requestEventsController.add(event);
+  }
+
+  void _replayLatestRequest() {
+    final WalletConnectRequestEvent? lastEvent = _latestRequestEvent;
+    if (lastEvent == null || _requestEventsController.isClosed) {
+      return;
+    }
+    _requestEventsController.add(lastEvent);
   }
 
   Future<void> connectFromUri(String uri) async {
-    if (_client == null) {
-      await initWalletConnect();
-    }
+    await initWalletConnect();
 
     final client = _client;
     if (client == null) {
@@ -736,7 +772,7 @@ class WalletConnectService extends ChangeNotifier {
     final Completer<void>? sessionProposalCompleter = _sessionProposalCompleter;
 
     final Duration sessionProposalTimeout = Platform.isAndroid
-        ? const Duration(seconds: 15)
+        ? const Duration(seconds: 45)
         : Duration.zero;
 
     try {
@@ -780,6 +816,20 @@ class WalletConnectService extends ChangeNotifier {
     }
   }
 
+  void _resolveSessionProposalCompleter({Object? error}) {
+    final Completer<void>? completer = _sessionProposalCompleter;
+    if (completer == null || completer.isCompleted) {
+      return;
+    }
+
+    if (error != null) {
+      completer.completeError(error);
+    } else {
+      completer.complete();
+    }
+    _sessionProposalCompleter = null;
+  }
+
   Future<void> startPairing(String uri) => connectFromUri(uri);
 
   Future<void> disconnectSession(String topic) async {
@@ -813,8 +863,7 @@ class WalletConnectService extends ChangeNotifier {
     }
 
     _pairingInProgress = false;
-    _sessionProposalCompleter?.complete();
-    _sessionProposalCompleter = null;
+    _resolveSessionProposalCompleter();
 
     debugLastProposalLog =
         'RAW event=${event.toString()} | params=${event.params.toString()}';
@@ -1111,6 +1160,7 @@ class WalletConnectService extends ChangeNotifier {
     }
     final t = sessionTopic(event) ?? '<unknown>';
     PopupCoordinator.I.log('WC:event session_connect topic:$t');
+    _resolveSessionProposalCompleter();
     unawaited(_refreshActiveSessions());
   }
 

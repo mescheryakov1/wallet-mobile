@@ -14,6 +14,12 @@ class WalletConnectManager extends ChangeNotifier {
 
   WalletConnectService? _service;
   StreamSubscription<WalletConnectRequestEvent>? _requestSubscription;
+  late final StreamController<WalletConnectRequestLogEntry?>
+      _actionableRequestController =
+      StreamController<WalletConnectRequestLogEntry?>.broadcast();
+  StreamSubscription<WalletConnectRequestLogEntry?>?
+      _actionableRequestSubscription;
+  Future<void>? _initializationFuture;
   bool _initialized = false;
 
   final WalletConnectRequestQueue requestQueue = WalletConnectRequestQueue();
@@ -34,19 +40,43 @@ class WalletConnectManager extends ChangeNotifier {
     String? projectId,
   }) async {
     if (_initialized) {
-      return;
+      return _initializationFuture ?? Future<void>.value();
     }
 
-    final WalletConnectService svc = WalletConnectService(
+    if (_initializationFuture != null) {
+      return _initializationFuture!;
+    }
+
+    _initializationFuture = _doInitialize(
       walletApi: walletApi,
       projectId: projectId,
     );
-    _service = svc
-      ..addListener(_handleServiceUpdate);
-    _requestSubscription = svc.requestEvents.listen(_handleRequestEvent);
-    await svc.init();
-    _initialized = true;
-    notifyListeners();
+    return _initializationFuture!;
+  }
+
+  Future<void> _doInitialize({
+    required LocalWalletApi walletApi,
+    String? projectId,
+  }) async {
+    try {
+      final WalletConnectService svc = WalletConnectService(
+        walletApi: walletApi,
+        projectId: projectId,
+      );
+      _service = svc
+        ..addListener(_handleServiceUpdate);
+      _requestSubscription = svc.requestEvents.listen(_handleRequestEvent);
+      _actionableRequestSubscription = _actionableRequestController.stream
+          .listen(_handleActionableRequest);
+      await svc.init();
+      _initialized = true;
+      notifyListeners();
+    } finally {
+      if (_initialized) {
+        return;
+      }
+      _initializationFuture = null;
+    }
   }
 
   WalletConnectPendingRequest? get pendingRequest => service.pendingRequest;
@@ -92,12 +122,7 @@ class WalletConnectManager extends ChangeNotifier {
 
   void dismissRequest(int requestId) {
     requestQueue.dismiss(requestId);
-    final WalletConnectRequestLogEntry? nextPending = _firstActionableRequest();
-    if (nextPending != null) {
-      WalletConnectPopupController.show(nextPending);
-    } else {
-      WalletConnectPopupController.hide();
-    }
+    _emitActionableRequest();
     notifyListeners();
   }
 
@@ -106,7 +131,7 @@ class WalletConnectManager extends ChangeNotifier {
     if (entry == null) {
       return;
     }
-    WalletConnectPopupController.show(entry);
+    _emitActionableRequest();
     notifyListeners();
   }
 
@@ -132,14 +157,25 @@ class WalletConnectManager extends ChangeNotifier {
           : existing?.txHash,
     );
     requestQueue.addOrUpdate(entry);
-    final WalletConnectRequestLogEntry? nextPending =
-        _firstActionableRequest();
-    if (nextPending != null) {
-      WalletConnectPopupController.show(nextPending);
+    _emitActionableRequest();
+    notifyListeners();
+  }
+
+  void _emitActionableRequest() {
+    if (_actionableRequestController.isClosed) {
+      return;
+    }
+    _actionableRequestController.add(_firstActionableRequest());
+  }
+
+  void _handleActionableRequest(
+    WalletConnectRequestLogEntry? actionableEntry,
+  ) {
+    if (actionableEntry != null) {
+      WalletConnectPopupController.show(actionableEntry);
     } else {
       WalletConnectPopupController.hide();
     }
-    notifyListeners();
   }
 
 
@@ -157,6 +193,8 @@ class WalletConnectManager extends ChangeNotifier {
   @override
   void dispose() {
     _requestSubscription?.cancel();
+    _actionableRequestSubscription?.cancel();
+    _actionableRequestController.close();
     _service?.removeListener(_handleServiceUpdate);
     super.dispose();
   }
