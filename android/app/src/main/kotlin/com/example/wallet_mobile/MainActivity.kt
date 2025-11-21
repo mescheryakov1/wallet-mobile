@@ -21,7 +21,29 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.i(logTag, "onCreate: savedInstanceState=${savedInstanceState != null}")
         handleIntent(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        Log.i(logTag, "onStart: activity visible; queue=${linkQueue.size} dispatched=${dispatchedLinks.size}")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Log.i(logTag, "onResume: rebinding methodChannel=${methodChannel != null}")
+        flushPendingLinks()
+    }
+
+    override fun onPause() {
+        Log.i(logTag, "onPause: keeping channel alive=${methodChannel != null}")
+        super.onPause()
+    }
+
+    override fun onStop() {
+        Log.i(logTag, "onStop: queue=${linkQueue.size} dispatched=${dispatchedLinks.size}")
+        super.onStop()
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -32,6 +54,7 @@ class MainActivity : FlutterActivity() {
                 setMethodCallHandler { call, result ->
                     when (call.method) {
                         "getInitialLink" -> {
+                            Log.d(logTag, "MethodChannel#getInitialLink invoked; initial=$initialLink queued=${linkQueue.size}")
                             result.success(initialLink)
                             initialLink = null
                         }
@@ -51,6 +74,14 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIntent(intent)
+    }
+
+    override fun onDestroy() {
+        Log.i(logTag, "onDestroy: clearing channel and queues")
+        methodChannel = null
+        linkQueue.clear()
+        queuedLinks.clear()
+        super.onDestroy()
     }
 
     private fun handleIntent(intent: Intent?) {

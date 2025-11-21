@@ -32,9 +32,24 @@ android {
 
     buildTypes {
         release {
+            isMinifyEnabled = false
+            // Explicitly disable resource shrinking to avoid Gradle errors when code shrinking is off.
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android.txt"),
+                "proguard-walletconnect.pro"
+            )
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+        }
+        debug {
+            isMinifyEnabled = false
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android.txt"),
+                "proguard-walletconnect.pro"
+            )
         }
     }
 }
