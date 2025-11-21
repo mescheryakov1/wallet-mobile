@@ -34,7 +34,7 @@ class WalletConnectPopupController {
     _entryNotifier = notifier;
 
     SchedulerBinding.instance.addPostFrameCallback((_) {
-      PopupCoordinator.I.replaceWith((BuildContext context) {
+      PopupCoordinator.I.enqueue((BuildContext context) {
         if (_entryNotifier != notifier) {
           SchedulerBinding.instance.addPostFrameCallback((_) {
             final NavigatorState navigator = Navigator.of(context);

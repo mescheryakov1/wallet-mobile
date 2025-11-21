@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class DeeplinkAndroid {
@@ -18,11 +17,9 @@ class DeeplinkAndroid {
       return;
     }
     _initialized = true;
-    debugPrint('DeeplinkAndroid: initializing method channel');
 
     _channel.setMethodCallHandler((MethodCall call) async {
       if (call.method == 'onLink' && call.arguments is String) {
-        debugPrint('DeeplinkAndroid: received onLink=${call.arguments}');
         _controller.add(call.arguments as String);
       }
     });
@@ -30,12 +27,10 @@ class DeeplinkAndroid {
     try {
       final String? initial = await _channel.invokeMethod<String>('getInitialLink');
       if (initial != null) {
-        debugPrint('DeeplinkAndroid: initial link from platform=$initial');
         _controller.add(initial);
       }
     } on MissingPluginException {
       // The channel is not available on this platform; ignore.
-      debugPrint('DeeplinkAndroid: MissingPluginException while requesting initial link');
     }
   }
 }
