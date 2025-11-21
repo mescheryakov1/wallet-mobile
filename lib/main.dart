@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:blockchain_utils/blockchain_utils.dart';
@@ -20,10 +21,13 @@ import 'wallet_connect_activity_screen.dart';
 import 'wallet_connect_manager.dart';
 import 'wallet_connect_models.dart';
 import 'wallet_connect_page.dart';
+import 'wallet_connect_logging.dart';
+
 late final WalletController _walletController;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await WalletConnectLogger.instance.initialize();
   PopupCoordinator.I.init();
   AppLifecycleLogger();
   _walletController = WalletController();
@@ -32,7 +36,29 @@ Future<void> main() async {
     walletApi: _walletController,
   );
   await handleInitialUriAndStream(WalletConnectManager.instance.service);
+  await _maybeConnectFromEnvUri();
   runApp(WalletApp(controller: _walletController));
+}
+
+Future<void> _maybeConnectFromEnvUri() async {
+  final String defineUri =
+      const String.fromEnvironment('WC_URI', defaultValue: '');
+  final String envUri = Platform.environment['WC_URI'] ?? '';
+  final String uri = defineUri.isNotEmpty ? defineUri : envUri;
+  if (uri.isEmpty) {
+    return;
+  }
+
+  try {
+    await WalletConnectManager.instance.service.connectFromUri(uri);
+    final int previewLength = uri.length > 16 ? 16 : uri.length;
+    WalletConnectLogger.instance.log(
+        'WC:triggered env-based pairing for uri=${uri.substring(0, previewLength)}...');
+  } catch (error, stackTrace) {
+    WalletConnectLogger.instance
+        .log('WC:failed to connect from WC_URI: $error');
+    debugPrint('WC:env pairing failed: $error\n$stackTrace');
+  }
 }
 
 class WalletApp extends StatelessWidget {
@@ -273,7 +299,6 @@ class _WalletHomePageState extends State<WalletHomePage> {
       ),
     );
   }
-
 }
 
 class _TransactionForm extends StatelessWidget {
@@ -357,7 +382,6 @@ class _TransactionForm extends StatelessWidget {
   }
 }
 
-
 class _EmptyWallet extends StatefulWidget {
   const _EmptyWallet({
     required this.onCreate,
@@ -428,14 +452,15 @@ class _EmptyWalletState extends State<_EmptyWallet> {
                           ),
                           actions: [
                             TextButton(
-                              onPressed: () => Navigator.of(dialogContext).pop(),
+                              onPressed: () =>
+                                  Navigator.of(dialogContext).pop(),
                               child: const Text('Закрыть'),
                             ),
                           ],
                         ),
                       );
                     }
-                },
+                  },
             icon: widget.isCreating
                 ? const SizedBox(
                     width: 16,
@@ -443,8 +468,8 @@ class _EmptyWalletState extends State<_EmptyWallet> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.add),
-            label:
-                Text(widget.isCreating ? 'Создание...' : 'Создать новый кошелёк'),
+            label: Text(
+                widget.isCreating ? 'Создание...' : 'Создать новый кошелёк'),
           ),
           const SizedBox(height: 24),
           const Divider(),
@@ -491,7 +516,8 @@ class _EmptyWalletState extends State<_EmptyWallet> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.download),
-            label: Text(widget.isImporting ? 'Импорт...' : 'Импортировать кошелёк'),
+            label: Text(
+                widget.isImporting ? 'Импорт...' : 'Импортировать кошелёк'),
           ),
         ],
       ),
@@ -701,7 +727,7 @@ class ClipboardHelper {
 
 class WalletController extends ChangeNotifier implements LocalWalletApi {
   WalletController({WalletStorage? storage})
-    : _storage = storage ?? WalletStorage();
+      : _storage = storage ?? WalletStorage();
 
   final WalletStorage _storage;
 
@@ -1007,7 +1033,8 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
     }
     const maxInt = 0x7fffffffffffffff;
     if (value.isNegative || value > BigInt.from(maxInt)) {
-      throw const FormatException('Недопустимое значение параметра транзакции.');
+      throw const FormatException(
+          'Недопустимое значение параметра транзакции.');
     }
     return value.toInt();
   }
@@ -1107,7 +1134,8 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
     try {
       final parsed = _parseImportInput(privateKey);
       await _loadWalletFromKey(parsed.privateKey, mnemonic: parsed.mnemonic);
-      await _storage.savePrivateKey(parsed.privateKey, mnemonic: parsed.mnemonic);
+      await _storage.savePrivateKey(parsed.privateKey,
+          mnemonic: parsed.mnemonic);
       notifyListeners();
       await refreshBalance();
       return const ActionResult.success('Кошелёк импортирован.');
@@ -1246,7 +1274,8 @@ class WalletController extends ChangeNotifier implements LocalWalletApi {
     final hasPrefix = sanitized.startsWith('0x') || sanitized.startsWith('0X');
     final hex = hasPrefix ? sanitized.substring(2) : sanitized;
     if (hex.length != 64) {
-      throw const FormatException('Приватный ключ должен содержать 64 символа.');
+      throw const FormatException(
+          'Приватный ключ должен содержать 64 символа.');
     }
     if (!RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex)) {
       throw const FormatException(
@@ -1403,9 +1432,9 @@ class NetworkConfiguration {
   );
 
   static List<NetworkConfiguration> get supportedNetworks => const [
-    mainnet,
-    sepolia,
-  ];
+        mainnet,
+        sepolia,
+      ];
 }
 
 class AmountParser {
@@ -1452,7 +1481,8 @@ class TransactionEntry {
     final toValue = json['to']?.toString();
     final valueString = json['value']?.toString() ?? '0';
     final gasPriceString = json['gasPrice']?.toString() ?? '0';
-    final gasUsedString = json['gasUsed']?.toString() ?? json['gas']?.toString();
+    final gasUsedString =
+        json['gasUsed']?.toString() ?? json['gas']?.toString();
     final timestampString = json['timeStamp']?.toString() ?? '0';
 
     final timestampSeconds = int.tryParse(timestampString) ?? 0;

@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:walletconnect_flutter_v2/apis/sign_api/models/session_models.dart';
 import 'package:walletconnect_flutter_v2/walletconnect_flutter_v2.dart';
@@ -17,6 +18,7 @@ import 'core/wallet/wc_utils.dart';
 import 'local_wallet_api.dart';
 import 'network_config.dart';
 import 'wallet_connect_models.dart';
+import 'wallet_connect_logging.dart';
 import 'nonce_manager.dart';
 
 const String _defaultWalletConnectProjectId =
@@ -119,7 +121,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     int clientInitMaxAttempts = 3,
     Duration? initialClientBackoff,
   })  : projectId = projectId ?? _defaultWalletConnectProjectId,
-        sessionProposalTimeout = sessionProposalTimeout ?? Duration.zero,
+        sessionProposalTimeout =
+            sessionProposalTimeout ?? const Duration(seconds: 30),
         androidSessionProposalTimeout =
             androidSessionProposalTimeout ?? const Duration(seconds: 25),
         maxPairingAttempts = maxPairingAttempts,
@@ -163,16 +166,30 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   WalletConnectPendingRequest? _pendingRequest;
   WalletConnectSessionInfo? _activeSession;
   Completer<String>? _pendingRequestCompleter;
-  final ListQueue<_QueuedRequest> _pendingRequestQueue = ListQueue<_QueuedRequest>();
+  final ListQueue<_QueuedRequest> _pendingRequestQueue =
+      ListQueue<_QueuedRequest>();
   WalletConnectActivityEntry? _lastActivityEntry;
   final Set<int> _processingRequestIds = <int>{};
   final Set<int> _handledRequestIds = <int>{};
   final ListQueue<int> _handledRequestOrder = ListQueue<int>();
   bool _walletListenerAttached = false;
   bool _lifecycleObserverAttached = false;
-  final StreamController<WalletConnectRequestEvent>
-      _requestEventsController =
+  final StreamController<WalletConnectRequestEvent> _requestEventsController =
       StreamController<WalletConnectRequestEvent>.broadcast();
+
+  void _logWithUi(String message) {
+    final String entry = 'WC:$message';
+    PopupCoordinator.I.log(entry);
+    WalletConnectLogger.instance.log(entry);
+  }
+
+  void _logDebug(String message) {
+    WalletConnectLogger.instance.log('WC:$message');
+  }
+
+  void _logNetwork(String message) {
+    WalletConnectLogger.instance.logNetwork('WC:$message');
+  }
 
   String get status => _status;
   WalletConnectState get connectionState => _connectionState;
@@ -203,6 +220,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   ) {
     return _handlePersonalSign(topic, params);
   }
+
   @visibleForTesting
   void setTestingClient(SignClient client) {
     _client = client;
@@ -277,8 +295,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     _status = hasReason ? '${newState.name}: $reason' : newState.name;
     final transitionLog =
         'state $previous -> $newState${hasReason ? ' ($reason)' : ''}';
-    PopupCoordinator.I.log('WC:$transitionLog');
-    debugPrint('WC:$transitionLog');
+    _logWithUi(transitionLog);
     if (newState == WalletConnectState.disconnected ||
         newState == WalletConnectState.failed) {
       _cancelPendingCompleterIfActive(
@@ -371,7 +388,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         return;
       } catch (error, stackTrace) {
         lastError = error;
-        debugPrint('WalletConnect init failed (attempt $attempt): $error\n$stackTrace');
+        _logDebug('init failed (attempt $attempt): $error\n$stackTrace');
         if (attempt >= attempts) {
           break;
         }
@@ -562,12 +579,13 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         methodPresent = true;
       }
 
-      if (normalizedChain != null && namespaceChains.contains(normalizedChain)) {
+      if (normalizedChain != null &&
+          namespaceChains.contains(normalizedChain)) {
         chainPresent = true;
       }
 
-      final chainMatches = normalizedChain == null ||
-          namespaceChains.contains(normalizedChain);
+      final chainMatches =
+          normalizedChain == null || namespaceChains.contains(normalizedChain);
       if (namespaceMethods.contains(normalizedMethod) && chainMatches) {
         allowed = true;
       }
@@ -575,8 +593,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
 
     final bool methodAllowed = methodSupported && methodPresent;
     final bool chainAllowed = chainSupported && chainPresent;
-    final bool finalAllowed = methodAllowed &&
-        (normalizedChain == null || chainAllowed);
+    final bool finalAllowed =
+        methodAllowed && (normalizedChain == null || chainAllowed);
 
     return _RequestValidationResult(
       allowed: finalAllowed,
@@ -662,8 +680,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         if (parts.length < 3) {
           continue;
         }
-        final normalizedChain =
-            _normalizeChainId('${parts[0]}:${parts[1]}');
+        final normalizedChain = _normalizeChainId('${parts[0]}:${parts[1]}');
         if (normalizedChain == null) {
           continue;
         }
@@ -754,7 +771,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  bool _isRequestHandled(int requestId) => _handledRequestIds.contains(requestId);
+  bool _isRequestHandled(int requestId) =>
+      _handledRequestIds.contains(requestId);
 
   Future<void> _loadPersistedSessions() async {
     try {
@@ -773,7 +791,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
           .toList(growable: false);
       _setSessionInfos(infos);
     } catch (error) {
-      debugPrint('Failed to load persisted WC sessions: $error');
+      _logDebug('failed to load persisted WC sessions: $error');
     }
   }
 
@@ -785,7 +803,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       );
       await prefs.setString(_sessionsStorageKey, encoded);
     } catch (error) {
-      debugPrint('Failed to persist WC sessions: $error');
+      _logDebug('failed to persist WC sessions: $error');
     }
   }
 
@@ -833,9 +851,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         }
         final String chain = '${parts[0]}:${parts[1]}'.toLowerCase();
         final String addressPart = parts.sublist(2).join(':');
-        final String normalizedAddress = addressPart.startsWith('0x')
-            ? addressPart
-            : '0x$addressPart';
+        final String normalizedAddress =
+            addressPart.startsWith('0x') ? addressPart : '0x$addressPart';
         manager.resetChainAddress(
           chainId: chain,
           address: normalizedAddress,
@@ -919,8 +936,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     bool clearQueued = false,
   }) {
     if (_pendingRequestQueue.isEmpty) {
-      debugPrint(
-        'WC:cancel diag source=$source reason=${reason ?? 'n/a'} queue=0 platform=${_platformLabel()}',
+      _logDebug(
+        'cancel diag source=$source reason=${reason ?? 'n/a'} queue=0 platform=${_platformLabel()}',
       );
       return;
     }
@@ -931,8 +948,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         .map((queued) => queued.request.requestId)
         .toList(growable: false);
 
-    debugPrint(
-      'WC:cancel diag source=$source reason=${reason ?? 'n/a'} '
+    _logDebug(
+      'cancel diag source=$source reason=${reason ?? 'n/a'} '
       'active=${request.requestId}/${request.method} '
       'queue=${queueIds.join(',')} clearQueued=$clearQueued '
       'platform=${_platformLabel()}',
@@ -1102,8 +1119,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _logPairingStage(String message) {
-    PopupCoordinator.I.log('WC:$message');
-    debugPrint('WC:$message');
+    _logWithUi(message);
   }
 
   void _logLifecycleChange(AppLifecycleState state, {String? reason}) {
@@ -1179,7 +1195,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     );
     _startPairingWatchdog();
     if (Platform.isAndroid) {
-      debugPrint('WC: starting pair flow, preparing to set pairingInProgress');
+      _logDebug('starting pair flow, preparing to set pairingInProgress');
     }
     _pairingInProgress = true;
     _status = 'pairing';
@@ -1215,8 +1231,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
           if (proposalTimeout == Duration.zero) {
             await sessionProposalCompleter.future;
           } else {
-            await sessionProposalCompleter.future
-                .timeout(proposalTimeout, onTimeout: () {
+            await sessionProposalCompleter.future.timeout(proposalTimeout,
+                onTimeout: () {
               throw TimeoutException(
                 'Timed out waiting for session proposal',
               );
@@ -1260,7 +1276,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       _stopPairingWatchdog();
       _sessionProposalCompleter = null;
       _pairingStartTime = null;
-      debugPrint('WalletConnect pair failed: $error\n$stackTrace');
+      _logDebug('pair failed: $error\n$stackTrace');
       notifyListeners();
       await _restartHandlersAndSubscriptions(reason: 'pairing error');
       rethrow;
@@ -1290,7 +1306,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       _lastErrorDebug = '';
     } catch (error, stackTrace) {
       _lastErrorDebug = 'disconnect failed: $error';
-      debugPrint('WalletConnect disconnect failed: $error\n$stackTrace');
+      _logDebug('disconnect failed: $error\n$stackTrace');
     }
 
     await _refreshActiveSessions();
@@ -1303,7 +1319,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     }
 
     if (Platform.isAndroid) {
-      debugPrint('WC: _onSessionProposal invoked');
+      _logDebug('_onSessionProposal invoked');
     }
 
     _logPairingStage(
@@ -1317,7 +1333,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     lastError = null;
 
     final DateTime now = DateTime.now();
-    final String startedAt = _pairingStartTime?.toIso8601String() ?? '<unknown>';
+    final String startedAt =
+        _pairingStartTime?.toIso8601String() ?? '<unknown>';
     _logPairingStage(
       'session proposal received at ${now.toIso8601String()} startedAt=$startedAt',
     );
@@ -1487,7 +1504,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         allowedEvents = List<String>.from(_supportedEvents);
       } else {
         allowedEvents = _supportedEvents
-            .where((eventName) => config.events.contains(eventName.toLowerCase()))
+            .where(
+                (eventName) => config.events.contains(eventName.toLowerCase()))
             .toList(growable: false);
         if (allowedEvents.isEmpty) {
           if (config.isRequired) {
@@ -1623,7 +1641,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _onSessionDelete(SessionDelete? event) {
-    _logPairingStage('session deleted topic=${event?.topic} relay=${_describeRelay(_client)}');
+    _logPairingStage(
+        'session deleted topic=${event?.topic} relay=${_describeRelay(_client)}');
     _status = 'ready';
     _cancelPendingCompleterIfActive(
       reason: 'Session deleted.',
@@ -1733,7 +1752,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
             event: eventName,
           );
         } catch (error) {
-          errors.add('registerEventEmitter($chainId/$eventName) failed: $error');
+          errors
+              .add('registerEventEmitter($chainId/$eventName) failed: $error');
         }
       }
 
@@ -1748,7 +1768,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
             handler: handler,
           );
         } catch (error) {
-          errors.add('registerRequestHandler($chainId/$methodName) failed: $error');
+          errors.add(
+              'registerRequestHandler($chainId/$methodName) failed: $error');
         }
       }
     }
@@ -1770,9 +1791,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     final method = event.params.request.method;
     PopupCoordinator.I.log('WC:event session_request $method');
     final t = sessionTopic(event) ?? '<unknown>';
-    debugPrint(
-      'WC session_request topic=$t method=$method',
-    );
+    _logDebug('session_request topic=$t method=$method');
     _logPairingStage(
       'session request id=${event.id} topic=$t method=$method relay=${_describeRelay(_client)}',
     );
@@ -2001,7 +2020,9 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     }
     final WalletConnectPendingRequest? request = _pendingRequest;
     final Completer<String>? completer = _pendingRequestCompleter;
-    if (request == null || request.requestId != requestId || completer == null) {
+    if (request == null ||
+        request.requestId != requestId ||
+        completer == null) {
       if (_processingRequestIds.contains(requestId)) {
         return;
       }
@@ -2025,7 +2046,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
             reason: Errors.getSdkError(Errors.USER_REJECTED_CHAINS),
           );
         } catch (error, stackTrace) {
-          debugPrint('WalletConnect proposal reject failed: $error\n$stackTrace');
+          _logDebug('proposal reject failed: $error\n$stackTrace');
         }
       }
       _pairingInProgress = false;
@@ -2088,7 +2109,9 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     }
     final WalletConnectPendingRequest? request = _pendingRequest;
     final Completer<String>? completer = _pendingRequestCompleter;
-    if (request == null || request.requestId != requestId || completer == null) {
+    if (request == null ||
+        request.requestId != requestId ||
+        completer == null) {
       if (_processingRequestIds.contains(requestId)) {
         return;
       }
@@ -2136,7 +2159,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       _markRequestHandled(requestId);
       notifyListeners();
     } catch (error, stackTrace) {
-      debugPrint('WalletConnect approve error: $error\n$stackTrace');
+      _logDebug('approve error: $error\n$stackTrace');
       final WalletConnectRequestException wrappedError =
           error is WalletConnectRequestException
               ? error
@@ -2145,10 +2168,9 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         completer.completeError(wrappedError);
       }
       _lastErrorDebug = 'approve failed: ${wrappedError.message}';
-      final WalletConnectRequestStatus failureStatus =
-          wrappedError.isRejected
-              ? WalletConnectRequestStatus.rejected
-              : WalletConnectRequestStatus.error;
+      final WalletConnectRequestStatus failureStatus = wrappedError.isRejected
+          ? WalletConnectRequestStatus.rejected
+          : WalletConnectRequestStatus.error;
       _emitRequestEvent(
         status: failureStatus,
         request: request,
@@ -2187,7 +2209,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  Future<String> _signPersonalMessage(WalletConnectPendingRequest request) async {
+  Future<String> _signPersonalMessage(
+      WalletConnectPendingRequest request) async {
     final params = _asList(request.params);
     if (params.isEmpty) {
       throw WalletConnectRequestException('personal_sign params are empty');
@@ -2232,8 +2255,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         );
 
     if (!_sameAddress(addressParam, walletAddress.hexEip55)) {
-      debugPrint(
-        'WalletConnect personal_sign address mismatch: requested=$addressParam wallet=${walletAddress.hexEip55}',
+      _logDebug(
+        'personal_sign address mismatch: requested=$addressParam wallet=${walletAddress.hexEip55}',
       );
     }
 
@@ -2261,8 +2284,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       throw WalletConnectRequestException('Missing namespaces for proposal');
     }
 
-    final int proposalId =
-        (data['proposalId'] as int?) ?? request.requestId;
+    final int proposalId = (data['proposalId'] as int?) ?? request.requestId;
 
     try {
       await client.approve(
@@ -2270,7 +2292,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         namespaces: namespaces,
       );
     } catch (error, stackTrace) {
-      debugPrint('approve proposal failed: $error\n$stackTrace');
+      _logDebug('approve proposal failed: $error\n$stackTrace');
       throw WalletConnectRequestException('Failed to approve proposal: $error');
     }
 
@@ -2308,14 +2330,16 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     final fromValue = txParams['from'];
     if (fromValue is String &&
         !_sameAddress(fromValue, walletAddress.hexEip55)) {
-      throw WalletConnectRequestException('Transaction from does not match wallet');
+      throw WalletConnectRequestException(
+          'Transaction from does not match wallet');
     }
 
     final chainId = request.chainId ??
         _inferChainIdFromSession(request.topic, request.method, request.params);
     final normalizedChain = _normalizeChainId(chainId);
     if (normalizedChain == null) {
-      throw WalletConnectRequestException('Unable to determine chain for request');
+      throw WalletConnectRequestException(
+          'Unable to determine chain for request');
     }
 
     final network = findNetworkByCaip2(normalizedChain);
@@ -2323,8 +2347,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       throw WalletConnectRequestException('Unsupported chain $normalizedChain');
     }
 
-    txParams['chainId'] ??=
-        '0x${network.chainIdNumeric.toRadixString(16)}';
+    txParams['chainId'] ??= '0x${network.chainIdNumeric.toRadixString(16)}';
 
     final Map<String, dynamic> baseTx = Map<String, dynamic>.from(txParams);
     final dynamic legacyGasLimit = baseTx.remove('gasLimit');
@@ -2353,7 +2376,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
       while (true) {
         SignedTransactionDetails? signed;
         try {
-          signed = await walletApi.signTransactionForNetwork(workingTx, network);
+          signed =
+              await walletApi.signTransactionForNetwork(workingTx, network);
         } catch (error) {
           NonceManager.instance.invalidateNonce(
             chainId: chainId,
@@ -2377,10 +2401,9 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
             signed.rawTransaction,
             network,
           );
-          final String hash =
-              (broadcastHash == null || broadcastHash.isEmpty)
-                  ? signed.hash
-                  : broadcastHash;
+          final String hash = (broadcastHash == null || broadcastHash.isEmpty)
+              ? signed.hash
+              : broadcastHash;
           return hash;
         } catch (error) {
           final String message = error.toString();
@@ -2449,12 +2472,73 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     NetworkConfig network,
     Future<T> Function(Web3Client client) action,
   ) async {
-    final Web3Client client = Web3Client(network.rpcUrl, http.Client());
+    final http.Client httpClient = _buildHttpClient(network);
+    final Web3Client client = Web3Client(network.rpcUrl, httpClient);
     try {
       return await action(client);
     } finally {
       client.dispose();
+      httpClient.close();
     }
+  }
+
+  http.Client _buildHttpClient(NetworkConfig network) {
+    if (!Platform.isWindows) {
+      return http.Client();
+    }
+
+    final String? customCaPath = _firstNonEmpty([
+      const String.fromEnvironment('WC_CA_BUNDLE', defaultValue: ''),
+      Platform.environment['WC_CA_BUNDLE'] ?? '',
+    ]);
+
+    SecurityContext? context;
+    if (customCaPath != null && customCaPath.isNotEmpty) {
+      try {
+        context = SecurityContext();
+        context.setTrustedCertificates(customCaPath);
+        _logNetwork('loaded custom CA bundle for RPC from $customCaPath');
+      } catch (error) {
+        _logNetwork(
+            'failed to load CA bundle from $customCaPath, using system certs: $error');
+        context = SecurityContext.defaultContext;
+      }
+    }
+
+    final HttpClient baseClient = HttpClient(context: context)
+      ..connectionTimeout = const Duration(seconds: 20)
+      ..idleTimeout = const Duration(seconds: 30);
+
+    baseClient.findProxy = HttpClient.findProxyFromEnvironment;
+
+    final Uri? parsed = Uri.tryParse(network.rpcUrl);
+    if (parsed != null &&
+        parsed.scheme.isNotEmpty &&
+        parsed.scheme != 'https') {
+      _logNetwork(
+          'RPC ${network.name} is using non-HTTPS scheme (${parsed.scheme}); verify endpoint configuration.');
+    }
+
+    final String proxyDescription =
+        parsed == null ? '<default>' : baseClient.findProxy(parsed.toString());
+    _logNetwork(
+      'windows http client ready rpc=${network.rpcUrl} proxy=$proxyDescription ca=${customCaPath?.isNotEmpty == true ? customCaPath : 'system'}',
+    );
+
+    return LoggingHttpClient(
+      IOClient(baseClient),
+      label: 'rpc:${network.name}',
+      onLog: _logNetwork,
+    );
+  }
+
+  String? _firstNonEmpty(List<String?> candidates) {
+    for (final String? candidate in candidates) {
+      if (candidate != null && candidate.trim().isNotEmpty) {
+        return candidate.trim();
+      }
+    }
+    return null;
   }
 
   Future<void> _ensureGasParameters(
@@ -2470,8 +2554,7 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
         maxFeePerGas == null &&
         maxPriorityFeePerGas == null) {
       final EtherAmount networkGasPrice = await client.getGasPrice();
-      transaction['gasPrice'] =
-          _encodeQuantity(networkGasPrice.getInWei);
+      transaction['gasPrice'] = _encodeQuantity(networkGasPrice.getInWei);
     }
 
     final BigInt? gasLimit =
@@ -2503,8 +2586,8 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   BigInt _increaseByPercent(BigInt value, int percent) {
-    final BigInt multiplied = (value * BigInt.from(100 + percent)) ~/
-        BigInt.from(100);
+    final BigInt multiplied =
+        (value * BigInt.from(100 + percent)) ~/ BigInt.from(100);
     if (multiplied <= value) {
       return value + BigInt.one;
     }
@@ -2627,4 +2710,35 @@ class WalletConnectService extends ChangeNotifier with WidgetsBindingObserver {
     }
     return chains.toList(growable: false);
   }
+}
+
+class LoggingHttpClient extends http.BaseClient {
+  LoggingHttpClient(this._inner, {required this.label, required this.onLog});
+
+  final http.Client _inner;
+  final String label;
+  final void Function(String message) onLog;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final Stopwatch stopwatch = Stopwatch()..start();
+    onLog('$label request ${request.method} ${request.url}');
+    try {
+      final http.StreamedResponse response = await _inner.send(request);
+      stopwatch.stop();
+      onLog(
+        '$label response ${response.statusCode} ${request.method} ${request.url} in ${stopwatch.elapsedMilliseconds}ms',
+      );
+      return response;
+    } catch (error) {
+      stopwatch.stop();
+      onLog(
+        '$label error ${request.method} ${request.url} after ${stopwatch.elapsedMilliseconds}ms: $error',
+      );
+      rethrow;
+    }
+  }
+
+  @override
+  void close() => _inner.close();
 }
